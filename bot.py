@@ -37,6 +37,42 @@ within 90 seconds, broadcasts it to every tracked guild, and deletes it.
 """
 from __future__ import annotations
 
+# ---------------------------------------------------------------------------
+# Self-update from GitHub — runs before anything else.
+# Clones the repo on first boot; pulls on every subsequent boot.
+# If new files were pulled, restarts the process so fresh code is used.
+# Safe to remove if you prefer manual file uploads via the panel.
+# ---------------------------------------------------------------------------
+import os as _os
+import subprocess as _subprocess
+import sys as _sys
+
+_BOT_DIR = _os.path.dirname(_os.path.abspath(__file__))
+_GIT_REPO = "https://github.com/ExoArcher/LanceAQuack-TTR"
+
+try:
+    if not _os.path.isdir(_os.path.join(_BOT_DIR, ".git")):
+        print("[auto-update] No .git found — cloning repo...", flush=True)
+        _subprocess.run(
+            ["git", "clone", _GIT_REPO, "."],
+            cwd=_BOT_DIR, check=True,
+        )
+        print("[auto-update] Clone complete. Restarting with fresh code...", flush=True)
+        _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+    else:
+        _result = _subprocess.run(
+            ["git", "pull"],
+            cwd=_BOT_DIR, capture_output=True, text=True,
+        )
+        _stdout = _result.stdout.strip()
+        print(f"[auto-update] git pull: {_stdout}", flush=True)
+        if "Already up to date." not in _stdout:
+            print("[auto-update] New code pulled. Restarting...", flush=True)
+            _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+except Exception as _e:
+    print(f"[auto-update] WARNING: git update failed ({_e}). Running existing code.", flush=True)
+# ---------------------------------------------------------------------------
+
 import asyncio
 import json
 import logging
@@ -791,50 +827,4 @@ class TTRBot(discord.Client):
                 return True
             return False
 
-        # ── /laq-announce  (owner only) ───────────────────────────────────
-        @self.tree.command(
-            name="laq-announce",
-            description="[Bot Admin Command] Broadcast a message to every tracked server. Auto-deletes in 30 min.",
-        )
-        @app_commands.describe(text="The announcement text to send to every tracked server.")
-        async def laq_announce(interaction: discord.Interaction, text: str) -> None:
-            if await _reject_non_admin(interaction):
-                return
-            text = text.strip()
-            if not text:
-                await interaction.response.send_message("Announcement text cannot be empty.", ephemeral=True)
-                return
-            await interaction.response.defer(ephemeral=True, thinking=True)
-            sent, failed, guilds_touched = await self._broadcast_announcement(text)
-            tracked = len(self._guilds_block())
-            ttl_min = ANNOUNCEMENT_TTL_SECONDS // 60
-            if sent == 0:
-                msg = (
-                    "Broadcast sent **0** messages — no servers are tracked yet. "
-                    "Run `/laq-setup` in each server first."
-                    if tracked == 0 else
-                    f"Broadcast sent **0** messages despite {tracked} tracked server(s). "
-                    "Check the console log — the bot may have lost channel permissions."
-                )
-            else:
-                msg = (
-                    f"Broadcast complete: **{sent}** message(s) across **{guilds_touched}** server(s)"
-                    + (f", {failed} failed" if failed else "")
-                    + f". Auto-deletes in {ttl_min} min."
-                )
-            await interaction.followup.send(msg, ephemeral=True)
-
-
-
-def main() -> None:
-    config = Config.load()
-    if not config.guild_allowlist:
-        log.warning(
-            "GUILD_ALLOWLIST is empty — the bot cannot join any server. Edit your .env."
-        )
-    bot = TTRBot(config)
-    bot.run(config.token, log_handler=None)
-
-
-if __name__ == "__main__":
-    main()
+        # ── /laq-announce  (owner only) ─�
