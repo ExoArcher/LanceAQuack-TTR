@@ -17,19 +17,18 @@ How it works
 
 Slash commands (all users)
 --------------------------
-``/laq-ttrinfo``    — send current district/invasion/sillymeter info.
-``/laq-ttrdoodle``  — send the current doodle list.
-
-Slash commands (Manage Server)
--------------------------------
-``/laq-setup``    — create channels and start tracking this guild.
+``/ttrinfo``      — DM current district/invasion/sillymeter info.
+``/ttrdoodle``    — DM the current doodle list.
 ``/laq-refresh``  — force an immediate refresh and sweep old messages.
+
+Slash commands (Manage Channels + Manage Messages)
+---------------------------------------------------
+``/laq-setup``    — create channels and start tracking this guild.
 ``/laq-teardown`` — stop tracking this guild (channels are NOT deleted).
 
 Slash commands (bot owner only)
 --------------------------------
 ``/laq-announce`` — broadcast a message to every tracked guild.
-``/laq-clear``    — delete every bot message here and reset tracking.
 
 Panel announcements
 -------------------
@@ -593,13 +592,13 @@ class TTRBot(discord.Client):
 
     def _register_commands(self) -> None:
 
-        # ── /laq-ttrinfo  (all users) ──────────────────────────────────────
+        # ── /ttrinfo  (all users) ──────────────────────────────────────────
         @self.tree.command(
-            name="laq-ttrinfo",
-            description="Show current Toontown district, invasion, field office, and Silly Meter info.",
+            name="ttrinfo",
+            description="[User Command] See current Toontown district, invasion, field office, and Silly Meter info.",
         )
         @app_commands.guild_only()
-        async def laq_ttrinfo(interaction: discord.Interaction) -> None:
+        async def ttrinfo(interaction: discord.Interaction) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
             if self._api is None:
                 await interaction.followup.send("API client not ready yet — try again in a moment.", ephemeral=True)
@@ -611,37 +610,52 @@ class TTRBot(discord.Client):
                 self._api.fetch("sillymeter"),
                 return_exceptions=True,
             )
-            invasions   = None if isinstance(results[0], BaseException) else results[0]
-            population  = None if isinstance(results[1], BaseException) else results[1]
+            invasions    = None if isinstance(results[0], BaseException) else results[0]
+            population   = None if isinstance(results[1], BaseException) else results[1]
             fieldoffices = None if isinstance(results[2], BaseException) else results[2]
-            sillymeter  = None if isinstance(results[3], BaseException) else results[3]
+            sillymeter   = None if isinstance(results[3], BaseException) else results[3]
 
             info_embed  = format_information(invasions=invasions, population=population, fieldoffices=fieldoffices)
             silly_embed = format_sillymeter(sillymeter)
-            await interaction.followup.send(embeds=[info_embed, silly_embed], ephemeral=True)
+            try:
+                await interaction.user.send(embed=info_embed)
+                await interaction.user.send(embed=silly_embed)
+                await interaction.followup.send("Check your DMs! 📬", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "I couldn't DM you — please enable DMs from server members and try again.",
+                    ephemeral=True,
+                )
 
-        # ── /laq-ttrdoodle  (all users) ───────────────────────────────────
+        # ── /ttrdoodle  (all users) ────────────────────────────────────────
         @self.tree.command(
-            name="laq-ttrdoodle",
-            description="Show the current Toontown doodle list with trait ratings.",
+            name="ttrdoodle",
+            description="[User Command] See the current Toontown doodle list with trait ratings.",
         )
         @app_commands.guild_only()
-        async def laq_ttrdoodle(interaction: discord.Interaction) -> None:
+        async def ttrdoodle(interaction: discord.Interaction) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
             if self._api is None:
                 await interaction.followup.send("API client not ready yet — try again in a moment.", ephemeral=True)
                 return
             doodle_data = await self._api.fetch("doodles")
             embeds = format_doodles(doodle_data)
-            # Discord cap is 10 embeds per message; format_doodles returns 4.
-            await interaction.followup.send(embeds=embeds[:10], ephemeral=True)
+            try:
+                for embed in embeds:
+                    await interaction.user.send(embed=embed)
+                await interaction.followup.send("Check your DMs! 📬", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "I couldn't DM you — please enable DMs from server members and try again.",
+                    ephemeral=True,
+                )
 
-        # ── /laq-setup  (Manage Server) ───────────────────────────────────
+        # ── /laq-setup  (Manage Channels + Manage Messages) ──────────────
         @self.tree.command(
             name="laq-setup",
-            description="Create the TTR feed channels in this server and start tracking them.",
+            description="[Server Admin Command] Create the TTR feed channels in this server and start tracking them.",
         )
-        @app_commands.default_permissions(manage_guild=True)
+        @app_commands.default_permissions(manage_channels=True, manage_messages=True)
         @app_commands.guild_only()
         async def laq_setup(interaction: discord.Interaction) -> None:
             guild = interaction.guild
@@ -683,12 +697,11 @@ class TTRBot(discord.Client):
                 ephemeral=True,
             )
 
-        # ── /laq-refresh  (Manage Server) ─────────────────────────────────
+        # ── /laq-refresh  (all users) ─────────────────────────────────────
         @self.tree.command(
             name="laq-refresh",
-            description="Force an immediate refresh of all TTR feeds and remove old messages.",
+            description="[User Command] Force an immediate refresh of all TTR feeds and remove old messages.",
         )
-        @app_commands.default_permissions(manage_guild=True)
         @app_commands.guild_only()
         async def laq_refresh(interaction: discord.Interaction) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
@@ -704,12 +717,12 @@ class TTRBot(discord.Client):
             tail = f" Cleaned up {swept} old message(s)." if swept else ""
             await interaction.followup.send(f"Refreshed.{tail}", ephemeral=True)
 
-        # ── /laq-teardown  (Manage Server) ────────────────────────────────
+        # ── /laq-teardown  (Manage Channels + Manage Messages) ───────────
         @self.tree.command(
             name="laq-teardown",
-            description="Stop tracking TTR feeds here. Channels are kept; delete them manually if you want.",
+            description="[Server Admin Command] Stop tracking TTR feeds here. Channels are kept; delete them manually if you want.",
         )
-        @app_commands.default_permissions(manage_guild=True)
+        @app_commands.default_permissions(manage_channels=True, manage_messages=True)
         @app_commands.guild_only()
         async def laq_teardown(interaction: discord.Interaction) -> None:
             guild = interaction.guild
@@ -739,7 +752,7 @@ class TTRBot(discord.Client):
         # ── /laq-announce  (owner only) ───────────────────────────────────
         @self.tree.command(
             name="laq-announce",
-            description="Broadcast a message to every tracked server. Auto-deletes in 30 min. Owner only.",
+            description="[Bot Admin Command] Broadcast a message to every tracked server. Auto-deletes in 30 min.",
         )
         @app_commands.describe(text="The announcement text to send to every tracked server.")
         async def laq_announce(interaction: discord.Interaction, text: str) -> None:
@@ -769,49 +782,6 @@ class TTRBot(discord.Client):
                 )
             await interaction.followup.send(msg, ephemeral=True)
 
-        # ── /laq-clear  (owner only) ──────────────────────────────────────
-        @self.tree.command(
-            name="laq-clear",
-            description="Delete every LanceAQuack message in this server and reset tracking. Owner only.",
-        )
-        @app_commands.guild_only()
-        async def laq_clear(interaction: discord.Interaction) -> None:
-            if await _reject_non_owner(interaction):
-                return
-            guild = interaction.guild
-            if guild is None:
-                await interaction.response.send_message("Must be used inside a server.", ephemeral=True)
-                return
-            await interaction.response.defer(ephemeral=True, thinking=True)
-            bot_id = self.user.id if self.user else 0
-            deleted = 0
-            no_history: list[str] = []
-            for channel in list(guild.text_channels):
-                try:
-                    async for msg in channel.history(limit=500):
-                        if msg.author.id != bot_id:
-                            continue
-                        try:
-                            await msg.delete()
-                            deleted += 1
-                        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                            pass
-                except discord.Forbidden:
-                    no_history.append(f"#{channel.name}")
-                except Exception:
-                    log.exception("Sweep of #%s failed", channel.name)
-            self._guilds_block().pop(str(guild.id), None)
-            self._announcements()[:] = [
-                r for r in self._announcements() if int(r.get("guild_id", 0)) != guild.id
-            ]
-            await self._save_state()
-            parts = [f"deleted **{deleted}** bot message(s)", "tracking reset — run `/laq-setup` to restart"]
-            if no_history:
-                preview = ", ".join(no_history[:5])
-                more = f" (+{len(no_history) - 5} more)" if len(no_history) > 5 else ""
-                parts.append(f"couldn't read history in: {preview}{more}")
-            log.info("laq-clear in %s: deleted=%d, skipped=%d", guild.name, deleted, len(no_history))
-            await interaction.followup.send("Done — " + "; ".join(parts) + ".", ephemeral=True)
 
 
 def main() -> None:
