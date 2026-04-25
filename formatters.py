@@ -518,7 +518,7 @@ def _doodle_guide_embed() -> discord.Embed:
         color=TTR_COLOR,
     )
 
-    # Star → trait-quality legend.
+    # Star → trait-quality legend (each tier lists its talents).
     legend = "\n\n".join(
         [
             f"{STAR_PERFECT} {_b('[Rarely Tired]')} — *Rarely Tired in "
@@ -527,16 +527,35 @@ def _doodle_guide_embed() -> discord.Embed:
             "it still offers amazing benefit, keeping your doodle from "
             "tiring in battle and giving more trick uses before it "
             "gets tired.*",
-            f"{STAR_GREAT} {_b('[Great]')} — *talents that offer strong "
-            "positive benefits to your doodle, but not as strong as "
-            "Rarely Tired.*",
-            f"{STAR_GOOD} {_b('[Good]')} — *decent talents for your "
-            "doodle that just aren't as strong as " + _b('[Great]')
-            + " talents.*",
-            f"{STAR_OK} {_b('[OK]')} — *these are not good talents, but "
-            "they could be worse.*",
-            f"{STAR_BAD} {_b('[Bad]')} — *these are just bad traits for "
-            "a doodle to have.*",
+            (
+                f"{STAR_GREAT} {_b('[Great]')} — *talents that offer strong "
+                "positive benefits to your doodle, but not as strong as "
+                "Rarely Tired.*\n"
+                "Talents: Always Affectionate, Always Playful, Rarely Bored, "
+                "Rarely Confused, Rarely Forgets, Rarely Grumpy, Rarely Hungry, "
+                "Rarely Lonely, Rarely Restless, Rarely Sad"
+            ),
+            (
+                f"{STAR_GOOD} {_b('[Good]')} — *decent talents for your "
+                "doodle that just aren't as strong as " + _b('[Great]') + " talents.*\n"
+                "Talents: Often Affectionate, Often Playful, Pretty Calm, Pretty Excitable"
+            ),
+            (
+                f"{STAR_OK} {_b('[OK]')} — *these are not good talents, but "
+                "they could be worse.*\n"
+                "Talents: Rarely Affectionate, Rarely Playful, Sometimes Affectionate, "
+                "Sometimes Bored, Sometimes Confused, Sometimes Forgets, Sometimes Grumpy, "
+                "Sometimes Hungry, Sometimes Lonely, Sometimes Playful, "
+                "Sometimes Restless, Sometimes Sad, Sometimes Tired"
+            ),
+            (
+                f"{STAR_BAD} {_b('[Bad]')} — *these are just bad traits for "
+                "a doodle to have.*\n"
+                "Talents: Always Bored, Always Confused, Always Forgets, Always Grumpy, "
+                "Always Hungry, Always Lonely, Always Restless, Always Sad, Always Tired, "
+                "Often Bored, Often Confused, Often Forgets, Often Grumpy, Often Hungry, "
+                "Often Lonely, Often Restless, Often Sad, Often Tired"
+            ),
         ]
     )
 
