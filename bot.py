@@ -720,7 +720,7 @@ class TTRBot(discord.Client):
         # ── /laq-teardown  (Manage Channels + Manage Messages) ───────────
         @self.tree.command(
             name="laq-teardown",
-            description="[Server Admin Command] Stop tracking TTR feeds here. Channels are kept; delete them manually if you want.",
+            description="[Server Admin Command] Stop TTR feed tracking. Channels are kept; delete them manually if needed.",
         )
         @app_commands.default_permissions(manage_channels=True, manage_messages=True)
         @app_commands.guild_only()
