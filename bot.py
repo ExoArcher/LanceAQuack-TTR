@@ -244,9 +244,18 @@ class TTRBot(discord.Client):
         await self._save_state()
 
     async def _sync_commands_to_guild(self, guild: discord.Guild) -> None:
-        """Clear stale per-guild commands and push the current command set."""
+        """Aggressively wipe all old per-guild commands then push the new set.
+
+        Two-phase sync:
+          1. Push an empty tree → Discord deletes every guild-specific command
+             (removes ttr_setup, ttr_refresh, laq_guild_add, duplicates, etc.)
+          2. Copy the in-memory global tree and push → registers new /laq-* commands.
+        """
         try:
+            # Phase 1 — nuke everything Discord knows about this guild.
             self.tree.clear_commands(guild=guild)
+            await self.tree.sync(guild=guild)
+            # Phase 2 — register the current command set.
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
             log.info("Command sync OK for %s (id=%s)", guild.name, guild.id)
