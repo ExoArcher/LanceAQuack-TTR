@@ -5,7 +5,7 @@ How it works
 ------------
 1. The bot is invited to one or more Discord servers. Only servers
    whose ID is in the *effective* allowlist (env ``GUILD_ALLOWLIST``
-   ∪ runtime allowlist persisted in ``state.json``) are accepted; the
+   u runtime allowlist persisted in ``state.json``) are accepted; the
    bot leaves any other guild that tries to add it, DMing the owner
    with instructions to request access from ExoArcher.
 2. In each allowed guild, an admin runs **``/laq-setup``** once. That
@@ -40,9 +40,8 @@ from __future__ import annotations
 
 # ---------------------------------------------------------------------------
 # Self-update from GitHub -- runs before anything else.
-# Clones the repo on first boot; pulls on every subsequent boot.
-# If new files were pulled, restarts the process so fresh code is used.
-# Safe to remove if you prefer manual file uploads via the panel.
+# Initialises the repo on first boot (works even with files already present);
+# pulls on every subsequent boot and restarts if new code was downloaded.
 # ---------------------------------------------------------------------------
 import os as _os
 import subprocess as _subprocess
@@ -53,12 +52,12 @@ _GIT_REPO = "https://github.com/ExoArcher/LanceAQuack-TTR"
 
 try:
     if not _os.path.isdir(_os.path.join(_BOT_DIR, ".git")):
-        print("[auto-update] No .git found -- cloning repo...", flush=True)
-        _subprocess.run(
-            ["git", "clone", _GIT_REPO, "."],
-            cwd=_BOT_DIR, check=True,
-        )
-        print("[auto-update] Clone complete. Restarting with fresh code...", flush=True)
+        print("[auto-update] No .git found -- initialising repo from GitHub...", flush=True)
+        _subprocess.run(["git", "init"],                               cwd=_BOT_DIR, check=True, capture_output=True)
+        _subprocess.run(["git", "remote", "add", "origin", _GIT_REPO], cwd=_BOT_DIR, check=True, capture_output=True)
+        _subprocess.run(["git", "fetch", "origin", "main"],             cwd=_BOT_DIR, check=True, capture_output=True)
+        _subprocess.run(["git", "reset", "--hard", "origin/main"],      cwd=_BOT_DIR, check=True, capture_output=True)
+        print("[auto-update] Repo initialised. Restarting with GitHub code...", flush=True)
         _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
     else:
         _result = _subprocess.run(
@@ -280,9 +279,9 @@ class TTRBot(discord.Client):
         """Aggressively wipe all old per-guild commands then push the new set.
 
         Two-phase sync:
-          1. Push an empty tree → Discord deletes every guild-specific command
+          1. Push an empty tree -> Discord deletes every guild-specific command
              (removes ttr_setup, ttr_refresh, laq_guild_add, duplicates, etc.)
-          2. Copy the in-memory global tree and push → registers new /laq-* commands.
+          2. Copy the in-memory global tree and push -> registers new /laq-* commands.
         """
         try:
             # Phase 1 -- nuke everything Discord knows about this guild.
@@ -328,7 +327,7 @@ class TTRBot(discord.Client):
 
     async def _send_placeholder(self, key: str, channel: discord.TextChannel) -> discord.Message:
         msg = await channel.send(embed=discord.Embed(
-            title=f"Loading {key}…", description="Fetching the latest data from TTR.", color=0x95A5A6,
+            title=f"Loading {key}...", description="Fetching the latest data from TTR.", color=0x95A5A6,
         ))
         try:
             await msg.pin(reason="Live TTR feed pin")
@@ -828,4 +827,50 @@ class TTRBot(discord.Client):
                 return True
             return False
 
-        # -- /laq-announce  (owner only) -
+        # -- /laq-announce  (owner only) -----------------------------------
+        @self.tree.command(
+            name="laq-announce",
+            description="[Bot Admin Command] Broadcast a message to every tracked server. Auto-deletes in 30 min.",
+        )
+        @app_commands.describe(text="The announcement text to send to every tracked server.")
+        async def laq_announce(interaction: discord.Interaction, text: str) -> None:
+            if await _reject_non_admin(interaction):
+                return
+            text = text.strip()
+            if not text:
+                await interaction.response.send_message("Announcement text cannot be empty.", ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            sent, failed, guilds_touched = await self._broadcast_announcement(text)
+            tracked = len(self._guilds_block())
+            ttl_min = ANNOUNCEMENT_TTL_SECONDS // 60
+            if sent == 0:
+                msg = (
+                    "Broadcast sent **0** messages -- no servers are tracked yet. "
+                    "Run `/laq-setup` in each server first."
+                    if tracked == 0 else
+                    f"Broadcast sent **0** messages despite {tracked} tracked server(s). "
+                    "Check the console log -- the bot may have lost channel permissions."
+                )
+            else:
+                msg = (
+                    f"Broadcast complete: **{sent}** message(s) across **{guilds_touched}** server(s)"
+                    + (f", {failed} failed" if failed else "")
+                    + f". Auto-deletes in {ttl_min} min."
+                )
+            await interaction.followup.send(msg, ephemeral=True)
+
+
+
+def main() -> None:
+    config = Config.load()
+    if not config.guild_allowlist:
+        log.warning(
+            "GUILD_ALLOWLIST is empty -- the bot cannot join any server. Edit your .env."
+        )
+    bot = TTRBot(config)
+    bot.run(config.token, log_handler=None)
+
+
+if __name__ == "__main__":
+    main()
