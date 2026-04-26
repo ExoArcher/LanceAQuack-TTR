@@ -918,7 +918,6 @@ class TTRBot(discord.Client):
                 "buying guide sent directly to your DMs.\n\n"
                 "`/invite-app` -- Get the link to add LanceAQuack TTR to your Discord account.\n\n"
                 "`/invite-server` -- Get the link to add LanceAQuack TTR to a server.\n\n"
-                "`/introduce @user` -- Send a new user a full introduction to the bot.\n\n"
                 "`/helpme` -- Show this message again."
             )
             try:
@@ -958,7 +957,7 @@ class TTRBot(discord.Client):
                 f"This is a **User App install** -- it does **not** join your server and "
                 f"requires **no server permissions**. "
                 f"It only adds the slash commands `/ttrinfo`, `/doodleinfo`, `/helpme`, "
-                f"`/invite-app`, `/invite-server`, and `/introduce` to your personal Discord account, "
+                f"`/invite-app` and `/invite-server` to your personal Discord account, "
                 f"usable in any server, DM, or group chat."
             )
             try:
@@ -1008,90 +1007,6 @@ class TTRBot(discord.Client):
                 await interaction.response.send_message("Check your DMs! :mailbox_with_mail:", ephemeral=True)
             except discord.Forbidden:
                 await interaction.response.send_message(msg, ephemeral=True)
-
-        # -- /introduce  (all users, guild + user install) -------------------
-        @self.tree.command(
-            name="introduce",
-            description="[User Command] Send a new user a full introduction to LanceAQuack TTR.",
-        )
-        @app_commands.describe(user="The Discord user you want to introduce to the bot.")
-        @app_commands.allowed_installs(guilds=True, users=True)
-        @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-        async def introduce(interaction: discord.Interaction, user: discord.User) -> None:
-            if await self._reject_if_banned(interaction):
-                return
-            app_link = (
-                "https://discord.com/oauth2/authorize"
-                "?client_id=1496971496709689654"
-                "&integration_type=1"
-                "&scope=applications.commands"
-            )
-            server_link = (
-                "https://discord.com/oauth2/authorize"
-                "?client_id=1496971496709689654"
-                "&permissions=17600776062032"
-                "&scope=bot+applications.commands"
-            )
-            msg = (
-                f"\U0001f44b **Hey {user.display_name}! {interaction.user.display_name} wanted to introduce you to LanceAQuack TTR.** :duck:\n"
-                f"\u200b\n"
-                f"**What is LanceAQuack TTR?**\n"
-                f"LanceAQuack TTR is a Toontown Rewritten companion bot that delivers live game data straight to Discord. "
-                f"It tracks district populations, cog invasions, active field offices, the global Silly Meter, "
-                f"and a full doodle buying guide with trait ratings -- all pulled directly from the TTR API and "
-                f"updated automatically.\n"
-                f"\u200b\n"
-                f"**Available Commands**\n"
-                f"`/ttrinfo` -- DMs you the current district populations, active cog invasions, "
-                f"open field offices, and the live Silly Meter status.\n\n"
-                f"`/doodleinfo` -- DMs you the full doodle availability list for every "
-                f"playground, including trait ratings and a buying guide.\n\n"
-                f"`/invite-app` -- DMs you the link to add the bot to your personal Discord account.\n\n"
-                f"`/invite-server` -- DMs you the link to add the bot to a server you manage.\n\n"
-                f"`/introduce @user` -- Send this intro message to someone new.\n\n"
-                f"`/helpme` -- Show the command list again anytime.\n"
-                f"\u200b\n"
-                f"**Add it to your account** *(no server needed)*\n"
-                f"{app_link}\n"
-                f"Once added, all commands work in any server, DM, or group chat -- "
-                f"no server permissions required.\n"
-                f"\u200b\n"
-                f"**Add it to a server**\n"
-                f"{server_link}\n"
-                f"The bot will create a **#tt-information** channel and a **#tt-doodles** channel "
-                f"and keep them live with TTR data automatically.\n"
-                f"\u200b\n"
-                f"**Server Permissions**\n"
-                f"\u2022 **Manage Channels** -- create the `#tt-information` and `#tt-doodles` channels on setup.\n"
-                f"\u2022 **Send Messages** -- post live game data into those channels.\n"
-                f"\u2022 **Manage Messages** -- edit and clean up its own posts as data updates.\n"
-                f"\u2022 **Embed Links** -- display rich embeds with formatted game information.\n"
-                f"\u2022 **Read Message History** -- locate and update previously posted embeds.\n"
-                f"\u2022 **View Channels** -- see the channels it manages.\n"
-                f"\nThe bot does **not** read general chat messages and only operates in the channels it creates."
-            )
-            sent_to_user = False
-            try:
-                await user.send(msg)
-                sent_to_user = True
-            except discord.Forbidden:
-                pass
-            if sent_to_user:
-                await interaction.response.send_message(
-                    f":mailbox_with_mail: Sent {user.mention} an introduction!", ephemeral=True
-                )
-            else:
-                try:
-                    await interaction.response.send_message(
-                        f"{user.mention} \u2014 {interaction.user.display_name} wanted to introduce you to "
-                        f"LanceAQuack TTR, but your DMs are closed so here it is:\n\n" + msg
-                    )
-                except discord.Forbidden:
-                    await interaction.response.send_message(
-                        f"Couldn't DM {user.mention} (DMs are closed) and couldn't post here either. "
-                        f"Ask them to open their DMs or share the intro yourself with `/helpme`.",
-                        ephemeral=True,
-                    )
 
         # -- /laq-ban  (bot admins only) -------------------------------------
         @self.tree.command(
