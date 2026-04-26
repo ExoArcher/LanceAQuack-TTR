@@ -912,14 +912,111 @@ def format_information(
 
 # ---------------------------------------------------------------------- sillymeter
 
+# Keyword -> (wiki display name, emoji, short description)
+# Keys are lowercase substrings checked against the API team name.
+_TEAM_INFO: dict[str, tuple[str, str, str]] = {
+    "sound":     (
+        "Double Sound Experience", ":mega:",
+        "Toons earn twice the amount of skill points for Sound gags "
+        "from defeating Cogs.",
+    ),
+    "squirt":    (
+        "Double Squirt Experience", ":droplet:",
+        "Toons earn twice the amount of skill points for Squirt gags "
+        "from defeating Cogs.",
+    ),
+    "throw":     (
+        "Double Throw Experience", ":pie:",
+        "Toons earn twice the amount of skill points for Throw gags "
+        "from defeating Cogs.",
+    ),
+    "drop":      (
+        "Double Drop Experience", ":rock:",
+        "Toons earn twice the amount of skill points for Drop gags "
+        "from defeating Cogs.",
+    ),
+    "toon-up":   (
+        "Double Toon-Up Experience", ":sparkling_heart:",
+        "Toons earn twice the amount of skill points for Toon-Up gags "
+        "from defeating Cogs.",
+    ),
+    "toonup":    (
+        "Double Toon-Up Experience", ":sparkling_heart:",
+        "Toons earn twice the amount of skill points for Toon-Up gags "
+        "from defeating Cogs.",
+    ),
+    "trap":      (
+        "Double Trap Experience", ":mouse_trap:",
+        "Toons earn twice the amount of skill points for Trap gags "
+        "from defeating Cogs.",
+    ),
+    "lure":      (
+        "Double Lure Experience", ":fishing_pole_and_fish:",
+        "Toons earn twice the amount of skill points for Lure gags "
+        "from defeating Cogs.",
+    ),
+    "garden":    (
+        "Speedy Garden Growth", ":seedling:",
+        "Toons' gardens grow every six hours at 12:00 AM, 6:00 AM, "
+        "12:00 PM, and 6:00 PM Pacific Time. Gardens do not deplete water.",
+    ),
+    "laff":      (
+        "Overjoyed Laff Meters", ":heart:",
+        "Toons receive +8 laff points to their maximum laff. "
+        "The maximum laff of 140 is temporarily raised to 148.",
+    ),
+    "fish":      (
+        "Teeming Fish Waters", ":fish:",
+        "Extra fishing docks are available, fish have bigger shadows, "
+        "and an extra fish appears in all ponds.",
+    ),
+    "jellybean": (
+        "Double Jellybeans", ":jar:",
+        "Jellybeans awarded from activities, including unites, are doubled.",
+    ),
+    "jelly":     (
+        "Double Jellybeans", ":jar:",
+        "Jellybeans awarded from activities, including unites, are doubled.",
+    ),
+    "racing":    (
+        "Double Racing Tickets", ":racing_car:",
+        "Toons receive twice the amount of tickets from all race tracks "
+        "in Goofy Speedway, with the exception of Grand Prix.",
+    ),
+    "teleport":  (
+        "Global Teleport Access", ":globe_with_meridians:",
+        "Toons automatically gain temporary teleport access to any area "
+        "across Toontown that they have already visited.",
+    ),
+    "global":    (
+        "Global Teleport Access", ":globe_with_meridians:",
+        "Toons automatically gain temporary teleport access to any area "
+        "across Toontown that they have already visited.",
+    ),
+    "doodle":    (
+        "Doodle Trick Boost", ":dog:",
+        "Toons' doodles perform tricks more frequently and earn more "
+        "experience from each trick they perform.",
+    ),
+}
+
+
+def _team_info(api_name: str) -> tuple[str, str, str]:
+    """Return (wiki name, emoji, description) for a team API name."""
+    lower = api_name.lower()
+    for keyword, info in _TEAM_INFO.items():
+        if keyword in lower:
+            return info
+    return (api_name, ":star:", "")
+
 
 def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
     """Embed for the #tt-information channel showing Silly Meter status.
 
-    States:
-      "Rewarding" -- a winning team is active; show the team name.
-      "Charging"  -- the meter is filling; list available teams + points.
-      anything else / None -- show a generic unavailable message.
+    Matches the style used in the official TTR Discord:
+      Charging  -- "The Silly Meter is filling up..." + points to go + teams
+                   Each team shown as: emoji **Wiki Name** / ***description***
+      Rewarding -- active team wiki name + its perk description
     """
     embed = discord.Embed(title=":circus_tent: Silly Meter", color=TTR_COLOR)
 
@@ -934,83 +1031,64 @@ def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
     if not isinstance(teams, list):
         teams = []
 
-    # ---- REWARDING: a team has won, reward is active --------------------
+    # ---- REWARDING: a winning team is active ----------------------------
     if state == "rewarding" and winner:
-        embed.description = (
-            ":white_check_mark: **A Silly Team is currently active!**\n\n"
-            f"**Active Team:** {winner}\n\n"
-            "*The Silly Meter has been filled. "
-            "Enjoy the rewards while they last!*"
-        )
-        # Still show other teams if the API returns them during rewarding
-        if teams:
-            lines: list[str] = []
-            for team in teams:
-                if not isinstance(team, dict):
-                    continue
-                name = team.get("name") or "Unknown"
-                pts  = team.get("points")
-                if pts is not None:
-                    try:
-                        lines.append(f"- **{name}** -- {int(pts):,} pts")
-                    except (TypeError, ValueError):
-                        lines.append(f"- **{name}**")
-                else:
-                    lines.append(f"- **{name}**")
-            if lines:
-                embed.add_field(
-                    name="Team Standings",
-                    value="\n".join(lines),
-                    inline=False,
-                )
+        wiki_name, emoji, desc = _team_info(winner)
+        body = f":white_check_mark: {emoji} **{wiki_name}** is active!"
+        if desc:
+            body += f"\n\n***{desc}***"
+        body += "\n\n*The Silly Meter has been filled. Enjoy the rewards while they last!*"
+        embed.description = body
 
-    # ---- CHARGING: meter is filling, show available teams + remaining ---
+    # ---- CHARGING: meter is filling up ----------------------------------
     else:
-        embed.description = (
-            ":arrows_counterclockwise: ***The Silly Meter is recharging "
-            "and will return soon!***\n\n"
-            "*There is no active Silly Team right now. "
-            "Keep playing to help charge the meter!*"
-        )
+        # Progress line mirrors TTR Discord: "X Global Silly Points to go! (Y%)"
+        needed = data.get("needed")
+        pct    = data.get("percentFilled") or data.get("progress")
 
+        progress_line = ""
+        if needed is not None:
+            try:
+                needed_int = int(needed)
+                if pct is not None:
+                    try:
+                        pct_val = float(pct)
+                        if pct_val <= 1.0:
+                            pct_val *= 100
+                        progress_line = (
+                            f"{needed_int:,} Global Silly Points to go! "
+                            f"({pct_val:.0f}%)"
+                        )
+                    except (TypeError, ValueError):
+                        progress_line = f"{needed_int:,} Global Silly Points to go!"
+                else:
+                    progress_line = f"{needed_int:,} Global Silly Points to go!"
+            except (TypeError, ValueError):
+                pass
+
+        desc_parts = ["**The Silly Meter is filling up...**"]
+        if progress_line:
+            desc_parts.append(progress_line)
+        embed.description = "\n".join(desc_parts)
+
+        # Team list: emoji **Wiki Name** + bold-italic description
         if teams:
-            lines = []
-            total_pts = 0
+            team_blocks: list[str] = []
             for team in teams:
                 if not isinstance(team, dict):
                     continue
-                name = team.get("name") or "Unknown"
-                pts  = team.get("points")
-                if pts is not None:
-                    try:
-                        pts_int = int(pts)
-                        total_pts += pts_int
-                        lines.append(f"- **{name}** -- {pts_int:,} pts")
-                    except (TypeError, ValueError):
-                        lines.append(f"- **{name}**")
-                else:
-                    lines.append(f"- **{name}**")
-
-            if lines:
+                api_name = (team.get("name") or "Unknown Team").strip()
+                wiki_name, emoji, team_desc = _team_info(api_name)
+                block = f"{emoji} **{wiki_name}**"
+                if team_desc:
+                    block += f"\n***{team_desc}***"
+                team_blocks.append(block)
+            if team_blocks:
                 embed.add_field(
-                    name="Available Teams",
-                    value="\n".join(lines),
+                    name="Competing Teams",
+                    value="\n\u200b\n".join(team_blocks),
                     inline=False,
                 )
-
-            # Remaining points -- use API-provided goal if present,
-            # otherwise skip (we have no reliable target to compute against).
-            goal = data.get("goal") or data.get("meterGoal") or data.get("needed")
-            if goal is not None:
-                try:
-                    remaining = max(0, int(goal) - total_pts)
-                    embed.add_field(
-                        name="Points Remaining",
-                        value=f"{remaining:,} pts to fill the meter",
-                        inline=False,
-                    )
-                except (TypeError, ValueError):
-                    pass
 
     _footer(embed, data.get("lastUpdated"))
     return embed
