@@ -18,8 +18,8 @@ How it works
 
 Slash commands (all users)
 --------------------------
-``/ttrinfo``      -- DM current district/invasion/sillymeter info.
-``/ttrdoodle``    -- DM the current doodle list.
+``/ttrinfo``      -- DM current district/invasion/sillymeter info. Works as a User App.
+``/doodleinfo``   -- DM the full doodle list with ratings. Works as a User App.
 ``/laq-refresh``  -- force an immediate refresh and sweep old messages.
 
 Slash commands (Manage Channels + Manage Messages)
@@ -677,12 +677,13 @@ class TTRBot(discord.Client):
 
     def _register_commands(self) -> None:
 
-        # -- /ttrinfo  (all users) ------------------------------------------
+        # -- /ttrinfo  (all users, guild + user install) -------------------
         @self.tree.command(
             name="ttrinfo",
             description="[User Command] See current Toontown district, invasion, field office, and Silly Meter info.",
         )
-        @app_commands.guild_only()
+        @app_commands.allowed_installs(guilds=True, users=True)
+        @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
         async def ttrinfo(interaction: discord.Interaction) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
             if self._api is None:
@@ -712,13 +713,14 @@ class TTRBot(discord.Client):
                     ephemeral=True,
                 )
 
-        # -- /ttrdoodle  (all users) ----------------------------------------
+        # -- /doodleinfo  (all users, guild + user install) -----------------
         @self.tree.command(
-            name="ttrdoodle",
+            name="doodleinfo",
             description="[User Command] See the current Toontown doodle list with trait ratings.",
         )
-        @app_commands.guild_only()
-        async def ttrdoodle(interaction: discord.Interaction) -> None:
+        @app_commands.allowed_installs(guilds=True, users=True)
+        @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+        async def doodleinfo(interaction: discord.Interaction) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
             if self._api is None:
                 await interaction.followup.send("API client not ready yet -- try again in a moment.", ephemeral=True)
