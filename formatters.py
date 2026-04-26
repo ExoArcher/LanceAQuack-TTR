@@ -1010,6 +1010,10 @@ def _team_info(api_name: str) -> tuple[str, str, str]:
     return (api_name, ":star:", "")
 
 
+# Total Global Silly Points required to fill the meter each cycle.
+_SILLYMETER_TOTAL = 5_000_000
+
+
 def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
     """Embed for the #tt-information channel showing Silly Meter status.
 
@@ -1020,7 +1024,7 @@ def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
       rewardPoints      -- list       usually [None, None, None]
       winner            -- str | None team name when a winner is active
       winnerId          -- int        0 while no winner
-      hp                -- int        remaining points to fill the meter
+      hp                -- int        accumulated points so far (total goal = 5,000,000)
       asOf              -- int        unix timestamp of this snapshot
       nextUpdateTimestamp -- int      when meter next ticks
     """
@@ -1057,7 +1061,13 @@ def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
         desc_line = "**The Silly Meter is filling up...**"
         if hp is not None:
             try:
-                desc_line += f"\n{int(hp):,} Global Silly Points to go!"
+                accumulated = int(hp)
+                remaining   = max(0, _SILLYMETER_TOTAL - accumulated)
+                pct         = min(100, accumulated / _SILLYMETER_TOTAL * 100)
+                desc_line  += (
+                    f"\n***{remaining:,} Global Silly Points to go!***"
+                    f"\n\u200b\n{accumulated:,} / {_SILLYMETER_TOTAL:,} ({pct:.0f}%)"
+                )
             except (TypeError, ValueError):
                 pass
         embed.description = desc_line
