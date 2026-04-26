@@ -83,6 +83,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -228,6 +229,12 @@ class TTRBot(discord.Client):
         self._register_commands()
 
     async def close(self) -> None:
+        """Broadcast maintenance notices then shut down cleanly."""
+        log.info("Shutdown signal received -- sending maintenance notices...")
+        try:
+            await asyncio.wait_for(self._broadcast_maintenance(), timeout=15.0)
+        except Exception as exc:
+            log.warning("Maintenance broadcast failed: %s", exc)
         if self._api is not None:
             await self._api.__aexit__(None, None, None)
         await super().close()
@@ -261,6 +268,7 @@ class TTRBot(discord.Client):
                 continue
             await self._sync_commands_to_guild(guild)
 
+        await self._cleanup_maintenance_msgs()
         await self._cleanup_announcements_on_startup()
         await self._save_state()
 
@@ -606,6 +614,65 @@ class TTRBot(discord.Client):
             log.info("Sent welcome DM to user %s (id=%s)", user, user.id)
         except discord.Forbidden:
             pass  # DMs closed, skip silently
+
+    # ------------------------------------------------- maintenance broadcast
+
+    async def _broadcast_maintenance(self) -> None:
+        """Send a maintenance embed to every tracked guild info channel.
+        Stores message IDs in state so startup cleanup can remove them."""
+        embed = discord.Embed(
+            title=":wrench: Temporary Maintenance",
+            description=(
+                "The bot is going down for temporary maintenance. "
+                "Please check [toonhq.org](https://toonhq.org) in the "
+                "meantime for your toony needs!"
+            ),
+            color=0xE67E22,
+            timestamp=datetime.now(timezone.utc),
+        )
+        maintenance_ids: dict[str, int] = {}
+        for guild_id_str, gs in list(self._guilds_block().items()):
+            info_entry = gs.get("information")
+            if not info_entry:
+                continue
+            channel = self.get_channel(int(info_entry["channel_id"]))
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            try:
+                msg = await channel.send(embed=embed)
+                maintenance_ids[guild_id_str] = msg.id
+                log.info("Sent maintenance notice to guild %s", guild_id_str)
+            except Exception as exc:
+                log.warning("Could not send maintenance notice to %s: %s", guild_id_str, exc)
+        if maintenance_ids:
+            self.state["maintenance_msgs"] = maintenance_ids
+            await self._save_state()
+
+    # ------------------------------------------------- maintenance cleanup
+
+    async def _cleanup_maintenance_msgs(self) -> None:
+        """Delete maintenance messages left from the previous shutdown."""
+        maintenance_ids: dict[str, int] = self.state.pop("maintenance_msgs", {})
+        if not maintenance_ids:
+            return
+        cleaned = 0
+        for guild_id_str, msg_id in maintenance_ids.items():
+            gs = self._guilds_block().get(guild_id_str, {})
+            info_entry = gs.get("information")
+            if not info_entry:
+                continue
+            channel = self.get_channel(int(info_entry["channel_id"]))
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.delete()
+                cleaned += 1
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+        await self._save_state()
+        if cleaned:
+            log.info("Startup cleanup: removed %d maintenance notice(s).", cleaned)
 
     async def _refresh_once(self) -> None:
         if self._api is None:
