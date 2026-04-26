@@ -103,6 +103,7 @@ log = logging.getLogger("ttr-bot")
 STATE_FILE = Path(__file__).with_name("state.json")
 STATE_VERSION = 2
 ANNOUNCE_FILE = Path(__file__).with_name("panel_announce.txt")
+TEARDOWN_LOG  = Path(__file__).with_name("teardown_log.txt")
 ANNOUNCEMENT_TITLE = "📢 LAQ Bot Announcement"
 ANNOUNCEMENT_TTL_SECONDS = 30 * 60
 
@@ -552,7 +553,7 @@ class TTRBot(discord.Client):
     async def _before_sweep_loop(self) -> None:
         await self.wait_until_ready()
 
-    _API_KEYS = ("invasions", "population", "fieldoffices", "doodles")
+    _API_KEYS = ("invasions", "population", "fieldoffices", "doodles", "sillymeter")
 
     async def _fetch_all(self) -> dict[str, dict | None]:
         if self._api is None:
@@ -815,11 +816,42 @@ class TTRBot(discord.Client):
                 return
             existed = self._guilds_block().pop(str(guild.id), None) is not None
             await self._save_state()
+            if existed:
+                await self._log_teardown(guild, interaction.user)
             msg = (
                 "Stopped tracking this server. Channels still exist; delete them manually if you'd like."
                 if existed else "Nothing to tear down -- this server isn't being tracked."
             )
             await interaction.response.send_message(msg, ephemeral=True)
+
+        # -- teardown logger -----------------------------------------------
+        async def self_log_teardown(guild: discord.Guild, invoker: discord.abc.User) -> None:
+            """Append one line to teardown_log.txt for every /laq-teardown."""
+            try:
+                owner_id   = guild.owner_id
+                owner_name = "unknown"
+                try:
+                    owner = guild.owner or await guild.fetch_member(owner_id)
+                    owner_name = str(owner)
+                except Exception:
+                    pass
+                ts    = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+                entry = (
+                    f"[{ts}]\n"
+                    f"  Guild ID    : {guild.id}\n"
+                    f"  Server Name : {guild.name}\n"
+                    f"  Owner Name  : {owner_name}\n"
+                    f"  Owner ID    : {owner_id}\n"
+                    f"  Invoked by  : {invoker} (id={invoker.id})\n"
+                    f"{'=' * 48}\n"
+                )
+                with open(TEARDOWN_LOG, "a", encoding="utf-8") as fh:
+                    fh.write(entry)
+                log.info("Teardown logged for guild %s (%s)", guild.id, guild.name)
+            except Exception as exc:
+                log.warning("Could not write teardown log: %s", exc)
+
+        self._log_teardown = self_log_teardown
 
         # -- admin-only guard ----------------------------------------------
         async def _reject_non_admin(interaction: discord.Interaction) -> bool:

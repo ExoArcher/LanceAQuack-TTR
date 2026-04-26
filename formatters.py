@@ -914,53 +914,103 @@ def format_information(
 
 
 def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
-    """Embed showing whether a Silly Team is active or the meter is charging.
+    """Embed for the #tt-information channel showing Silly Meter status.
 
-    The TTR Silly Meter API returns a ``state`` field of either
-    ``"Rewarding"`` (a winning team is currently active) or ``"Charging"``
-    (the meter is filling up). The ``winner`` field holds the active team
-    name when rewarding, and is null when charging.
+    States:
+      "Rewarding" -- a winning team is active; show the team name.
+      "Charging"  -- the meter is filling; list available teams + points.
+      anything else / None -- show a generic unavailable message.
     """
-    embed = discord.Embed(title="\U0001f3aa Silly Meter", color=TTR_COLOR)
+    embed = discord.Embed(title=":circus_tent: Silly Meter", color=TTR_COLOR)
 
     if data is None:
         embed.description = ":warning: Could not reach the TTR Silly Meter API."
         _footer(embed, None)
         return embed
 
-    state  = (data.get("state") or "").strip()
+    state  = (data.get("state") or "").strip().lower()
     winner = (data.get("winner") or "").strip()
+    teams  = data.get("teams") or []
+    if not isinstance(teams, list):
+        teams = []
 
-    if state.lower() == "rewarding" and winner:
+    # ---- REWARDING: a team has won, reward is active --------------------
+    if state == "rewarding" and winner:
         embed.description = (
-            f"\u2705 **There is an active Silly Team!**\n\n"
-            f"**Current Team:** {winner}\n\n"
-            f"*The Silly Meter is fully charged and rewarding Toons.*"
+            ":white_check_mark: **A Silly Team is currently active!**\n\n"
+            f"**Active Team:** {winner}\n\n"
+            "*The Silly Meter has been filled. "
+            "Enjoy the rewards while they last!*"
         )
+        # Still show other teams if the API returns them during rewarding
+        if teams:
+            lines: list[str] = []
+            for team in teams:
+                if not isinstance(team, dict):
+                    continue
+                name = team.get("name") or "Unknown"
+                pts  = team.get("points")
+                if pts is not None:
+                    try:
+                        lines.append(f"- **{name}** -- {int(pts):,} pts")
+                    except (TypeError, ValueError):
+                        lines.append(f"- **{name}**")
+                else:
+                    lines.append(f"- **{name}**")
+            if lines:
+                embed.add_field(
+                    name="Team Standings",
+                    value="\n".join(lines),
+                    inline=False,
+                )
+
+    # ---- CHARGING: meter is filling, show available teams + remaining ---
     else:
         embed.description = (
-            "\u26a1 **The Silly Meter is currently charging.**\n\n"
+            ":arrows_counterclockwise: ***The Silly Meter is recharging "
+            "and will return soon!***\n\n"
             "*There is no active Silly Team right now. "
             "Keep playing to help charge the meter!*"
         )
 
-    teams = data.get("teams") or []
-    if isinstance(teams, list) and teams:
-        lines: list[str] = []
-        for team in teams:
-            if not isinstance(team, dict):
-                continue
-            name   = team.get("name") or "Unknown"
-            points = team.get("points")
-            if points is not None:
+        if teams:
+            lines = []
+            total_pts = 0
+            for team in teams:
+                if not isinstance(team, dict):
+                    continue
+                name = team.get("name") or "Unknown"
+                pts  = team.get("points")
+                if pts is not None:
+                    try:
+                        pts_int = int(pts)
+                        total_pts += pts_int
+                        lines.append(f"- **{name}** -- {pts_int:,} pts")
+                    except (TypeError, ValueError):
+                        lines.append(f"- **{name}**")
+                else:
+                    lines.append(f"- **{name}**")
+
+            if lines:
+                embed.add_field(
+                    name="Available Teams",
+                    value="\n".join(lines),
+                    inline=False,
+                )
+
+            # Remaining points -- use API-provided goal if present,
+            # otherwise skip (we have no reliable target to compute against).
+            goal = data.get("goal") or data.get("meterGoal") or data.get("needed")
+            if goal is not None:
                 try:
-                    lines.append(f"\u2022 **{name}** \u2014 {int(points):,} points")
+                    remaining = max(0, int(goal) - total_pts)
+                    embed.add_field(
+                        name="Points Remaining",
+                        value=f"{remaining:,} pts to fill the meter",
+                        inline=False,
+                    )
                 except (TypeError, ValueError):
-                    lines.append(f"\u2022 **{name}**")
-            else:
-                lines.append(f"\u2022 **{name}**")
-        if lines:
-            embed.add_field(name="Team Standings", value="\n".join(lines), inline=False)
+                    pass
 
     _footer(embed, data.get("lastUpdated"))
     return embed
@@ -974,10 +1024,13 @@ def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
 # Each formatter returns list[discord.Embed] — the bot creates /
 # maintains one Discord message per embed, in order.
 FORMATTERS = {
-    "information": lambda d: [format_information(
-        invasions=d.get("invasions"),
-        population=d.get("population"),
-        fieldoffices=d.get("fieldoffices"),
-    )],
+    "information": lambda d: [
+        format_information(
+            invasions=d.get("invasions"),
+            population=d.get("population"),
+            fieldoffices=d.get("fieldoffices"),
+        ),
+        format_sillymeter(d.get("sillymeter")),
+    ],
     "doodles": lambda d: format_doodles(d.get("doodles")),
 }
