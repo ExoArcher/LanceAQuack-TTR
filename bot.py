@@ -812,43 +812,62 @@ class TTRBot(discord.Client):
         kept_ids: list[int] = []
         edited   = 0
 
+        async def _send_fresh(embed: discord.Embed) -> int:
+            """Send a new message, pin it, and return its ID."""
+            new_msg = await channel.send(embed=embed)
+            try:
+                await new_msg.pin(reason="Live TTR feed pin")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            return new_msg.id
+
         for mid, embed in zip(ids, embeds):
             try:
                 await (await channel.fetch_message(mid)).edit(embed=embed)
                 kept_ids.append(mid)
                 edited += 1
             except discord.NotFound:
-                new_msg = await channel.send(embed=embed)
-                try:
-                    await new_msg.pin(reason="Live TTR feed pin")
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
-                kept_ids.append(new_msg.id)
+                # Message gone — post a fresh one.
+                kept_ids.append(await _send_fresh(embed))
                 edited += 1
             except discord.HTTPException as exc:
-                log.warning(
-                    "Transient HTTP %s editing message %s (%s/%s) -- will retry.",
-                    exc.status, mid, guild_id, feed_key,
-                )
-                kept_ids.append(mid)
+                if exc.status == 400:
+                    # 400 Bad Request is not transient — the message can't be
+                    # edited (e.g. the old message has become invalid).
+                    # Delete it and post a fresh replacement.
+                    log.warning(
+                        "HTTP 400 on message %s (%s/%s) -- replacing with a fresh message.",
+                        mid, guild_id, feed_key,
+                    )
+                    try:
+                        msg = await channel.fetch_message(mid)
+                        await msg.delete()
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        pass
+                    kept_ids.append(await _send_fresh(embed))
+                    edited += 1
+                else:
+                    # Truly transient (503, 429, etc.) -- keep the ID and retry next cycle.
+                    log.warning(
+                        "Transient HTTP %s editing message %s (%s/%s) -- will retry.",
+                        exc.status, mid, guild_id, feed_key,
+                    )
+                    kept_ids.append(mid)
             await asyncio.sleep(3.0)
 
-        # Blank out any surplus message slots.
+        # Delete surplus message slots instead of leaving stale placeholders.
+        # The channel count self-corrects next time the feed has more embeds.
         for mid in ids[len(embeds):]:
             try:
-                await (await channel.fetch_message(mid)).edit(
-                    embed=discord.Embed(
-                        description="*(no data for this tier right now)*", color=0x95A5A6
-                    )
-                )
-                kept_ids.append(mid)
-                edited += 1
-            except discord.NotFound:
+                msg = await channel.fetch_message(mid)
+                await msg.delete()
+                log.info("Deleted surplus %s message %s in guild %s", feed_key, mid, guild_id)
+            except (discord.NotFound, discord.Forbidden):
                 pass
             except discord.HTTPException as exc:
-                log.warning("Transient HTTP %s on stale-slot message %s -- keeping ID.", exc.status, mid)
-                kept_ids.append(mid)
-            await asyncio.sleep(3.0)
+                log.warning("Could not delete surplus message %s: HTTP %s", mid, exc.status)
+            await asyncio.sleep(1.0)
+        # Don't add surplus IDs to kept_ids — they are gone.
 
         self._set_state(guild_id, feed_key, channel.id, kept_ids)
         return edited
