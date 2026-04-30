@@ -103,7 +103,7 @@ from config import Config
 from formatters import FORMATTERS, format_doodles, format_information, format_sillymeter
 from ttr_api import TTRApiClient
 from Console import run_console
-from calculate import register_calculate, build_suit_calculator_embed
+from calculate import register_calculate, build_suit_calculator_embeds
 
 logging.basicConfig(
     level=logging.INFO,
@@ -298,6 +298,7 @@ class TTRBot(discord.Client):
         await self._cleanup_maintenance_msgs()
         asyncio.create_task(run_console(self), name="console-listener")
         await self._cleanup_announcements_on_startup()
+        await self._refresh_suit_calculator_all_guilds()
         await self._save_state()
 
         if not self._refresh_loop.is_running():
@@ -434,36 +435,90 @@ class TTRBot(discord.Client):
         self, guild_id: int, channel: discord.TextChannel,
     ) -> None:
         """
-        Post (or edit in place) the pinned info embed in #suit-calculator.
-        State is stored under guild → 'suit_calculator' → {channel_id, message_id}.
-        Re-running /laq-setup edits the existing pin rather than posting a duplicate.
+        Post (or edit in place) the 4 static info embeds in #suit-calculator.
+        State stored under guild → 'suit_calculator' → {channel_id, message_ids: [id×4]}.
+        Edits existing messages in place on re-setup / startup / laq-refresh.
+        NOT updated by the 90-second refresh loop — only on startup and /laq-refresh.
         """
-        embed  = build_suit_calculator_embed()
-        gs     = self._guild_state(guild_id)
-        entry  = gs.get("suit_calculator", {})
-        msg_id = (entry.get("message_ids") or [None])[0] if isinstance(entry, dict) else None
+        embeds  = build_suit_calculator_embeds()
+        gs      = self._guild_state(guild_id)
+        entry   = gs.get("suit_calculator", {})
+        stored_ids: list[int] = []
 
-        if msg_id:
-            try:
-                msg = await channel.fetch_message(int(msg_id))
-                await msg.edit(embed=embed)
-                log.info("[suit-calc] Updated pin %s in guild %s", msg_id, guild_id)
-                return
-            except discord.NotFound:
-                log.info("[suit-calc] Old pin gone for guild %s -- reposting.", guild_id)
-            except discord.HTTPException as exc:
-                log.warning("[suit-calc] Could not edit existing pin: %s", exc)
+        if isinstance(entry, dict):
+            raw_ids = entry.get("message_ids", [])
+            if isinstance(raw_ids, list):
+                stored_ids = [int(i) for i in raw_ids if i]
 
-        try:
-            msg = await channel.send(embed=embed)
+        # Try to edit existing messages in place
+        verified_ids: list[int] = []
+        for i, embed in enumerate(embeds):
+            mid = stored_ids[i] if i < len(stored_ids) else None
+            if mid:
+                try:
+                    msg = await channel.fetch_message(mid)
+                    await msg.edit(embed=embed)
+                    verified_ids.append(msg.id)
+                    log.info("[suit-calc] Edited embed %d/%d msg=%s guild=%s",
+                             i+1, len(embeds), msg.id, guild_id)
+                    continue
+                except discord.NotFound:
+                    log.info("[suit-calc] Embed %d gone for guild %s -- reposting.", i+1, guild_id)
+                except discord.HTTPException as exc:
+                    log.warning("[suit-calc] Could not edit embed %d: %s", i+1, exc)
+            # Post a new message for this embed
             try:
-                await msg.pin(reason="Suit calculator info — LanceAQuack TTR")
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                log.debug("[suit-calc] Could not pin message: %s", exc)
-            gs["suit_calculator"] = {"channel_id": channel.id, "message_ids": [msg.id]}
-            log.info("[suit-calc] Posted pin %s in guild %s (#%s)", msg.id, guild_id, channel.name)
-        except Exception as exc:
-            log.warning("[suit-calc] Failed to post pin in guild %s: %s", guild_id, exc)
+                new_msg = await channel.send(embed=embed)
+                if i == 0:
+                    try:
+                        await new_msg.pin(reason="Suit-O-Nomics Calculator-inator — LanceAQuack TTR")
+                    except (discord.Forbidden, discord.HTTPException) as exc:
+                        log.debug("[suit-calc] Could not pin: %s", exc)
+                verified_ids.append(new_msg.id)
+                log.info("[suit-calc] Posted embed %d/%d msg=%s guild=%s (#%s)",
+                         i+1, len(embeds), new_msg.id, guild_id, channel.name)
+            except Exception as exc:
+                log.warning("[suit-calc] Failed to post embed %d in guild %s: %s",
+                            i+1, guild_id, exc)
+
+        if verified_ids:
+            gs["suit_calculator"] = {"channel_id": channel.id, "message_ids": verified_ids}
+
+    async def _refresh_suit_calculator_all_guilds(self) -> None:
+        """
+        Refresh the suit-calculator embeds for every tracked guild.
+        Called on startup and on /laq-refresh. NOT part of the 90s loop.
+        """
+        calc_name = self.config.channel_suit_calculator
+        updated   = 0
+        for guild_id_str in list(self._guilds_block().keys()):
+            try:
+                guild_id = int(guild_id_str)
+            except ValueError:
+                continue
+            if self.get_guild(guild_id) is None:
+                continue
+            gs    = self._guild_state(guild_id)
+            entry = gs.get("suit_calculator", {})
+            channel_id = int(entry.get("channel_id", 0)) if isinstance(entry, dict) else 0
+            channel = self.get_channel(channel_id) if channel_id else None
+            if not isinstance(channel, discord.TextChannel):
+                # Fall back to searching by name
+                guild = self.get_guild(guild_id)
+                channel = (
+                    discord.utils.get(guild.text_channels, name=calc_name)
+                    if guild else None
+                )
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            try:
+                await self._ensure_suit_calculator_pin(guild_id, channel)
+                updated += 1
+            except Exception:
+                log.exception("[suit-calc] Refresh failed for guild %s", guild_id)
+        if updated:
+            log.info("[suit-calc] Refreshed embeds for %d guild(s).", updated)
+            await self._save_state()
 
     # ══════════════════════════════════════════════════════════════════════════
     # Announcement tracking & cleanup
@@ -1232,6 +1287,11 @@ class TTRBot(discord.Client):
                     log.exception("Sweep failed for %s", interaction.guild.id)
                 if swept:
                     await self._save_state()
+            # Also refresh the suit-calculator static embeds (not on 90s loop).
+            try:
+                await self._refresh_suit_calculator_all_guilds()
+            except Exception:
+                log.exception("Suit-calc refresh failed during laq-refresh")
             tail = f" Cleaned up {swept} old message(s)." if swept else ""
             await interaction.followup.send(f"Refreshed.{tail}", ephemeral=True)
 
