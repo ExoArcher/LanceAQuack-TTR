@@ -614,6 +614,176 @@ def build_suit_calculator_embeds() -> list[discord.Embed]:
     return [e1, e2, e3, e4]
 
 
+# ── FACTION THREAD EMBEDS ─────────────────────────────────────────────────────
+
+_ACT_SHORT: dict[str, str] = {
+    "Steel Factory — Long":     "Steel-L",
+    "Steel Factory — Short":    "Steel-S",
+    "Scrap Factory — Long":     "Scrap-L",
+    "Scrap Factory — Short":    "Scrap-S",
+    "Bullion Mint":             "Bullion",
+    "Coin Mint":                "Coin",
+    "DA Office — Senior Wing":  "DA-Sr",
+    "DA Office — Junior Wing":  "DA-Jr",
+    "The Final Fringe":         "Fringe",
+    "The First Fairway":        "Fairway",
+}
+
+# Per-faction activity text for each of the 3 thread embeds (normal / disguise / 2.0).
+_THREAD_ACTIVITIES: dict[str, tuple[str, str, str]] = {
+    "sellbot": (
+        "• **Scrap Factory — Short** (350–356 pts) — quick; great for early suits\n"
+        "• **Scrap Factory — Long** (596–638 pts) — solid mid-progression option\n"
+        "• **Steel Factory — Long** (1,525–1,630 pts) — best merits per run\n"
+        "• **VP (Vice President)** — large merit bonus on completion",
+
+        "• **Steel Factory — Long** (1,525–1,630 pts) — best merits per run\n"
+        "• **Scrap Factory — Long** (596–638 pts) — solid alternative\n"
+        "• **VP (Vice President)** — large merit bonus; do it whenever available",
+
+        "• **Steel Factory — Long** (1,525–1,630 pts) — best merit source for 2.0\n"
+        "• **VP (Vice President)** — merit bonus; prioritise when available",
+    ),
+    "cashbot": (
+        "• **Coin Mint** (702–807 pts) — efficient for early suits\n"
+        "• **Bullion Mint** (1,626–1,850 pts) — best cogbucks per run\n"
+        "• **CFO (Chief Financial Officer)** — large cogbuck bonus on completion",
+
+        "• **Bullion Mint** (1,626–1,850 pts) — best cogbucks per run\n"
+        "• **Coin Mint** (702–807 pts) — efficient alternative\n"
+        "• **CFO (Chief Financial Officer)** — large bonus; do it whenever available",
+
+        "• **Bullion Mint** (1,626–1,850 pts) — best cogbuck source for 2.0\n"
+        "• **CFO (Chief Financial Officer)** — bonus; prioritise when available",
+    ),
+    "lawbot": (
+        "• **DA Office — Junior Wing** (781–889 pts) — good for early suits\n"
+        "• **DA Office — Senior Wing** (1,854–2,082 pts) — best jury notices per run\n"
+        "• **CJ (Chief Justice)** — large jury notice bonus on completion",
+
+        "• **DA Office — Senior Wing** (1,854–2,082 pts) — best jury notices per run\n"
+        "• **DA Office — Junior Wing** (781–889 pts) — efficient alternative\n"
+        "• **CJ (Chief Justice)** — large bonus; do it whenever available",
+
+        "• **DA Office — Senior Wing** (1,854–2,082 pts) — best jury notice source for 2.0\n"
+        "• **CJ (Chief Justice)** — bonus; prioritise when available",
+    ),
+    "bossbot": (
+        "• **The First Fairway** (882–975 pts) — good for early suits\n"
+        "• **The Final Fringe** (2,097–2,305 pts) — best stock options per run\n"
+        "• **CEO (Chief Executive Officer)** — large stock option bonus on completion",
+
+        "• **The Final Fringe** (2,097–2,305 pts) — best stock options per run\n"
+        "• **The First Fairway** (882–975 pts) — efficient alternative\n"
+        "• **CEO (Chief Executive Officer)** — large bonus; do it whenever available",
+
+        "• **The Final Fringe** (2,097–2,305 pts) — best stock option source for 2.0\n"
+        "• **CEO (Chief Executive Officer)** — bonus; prioritise when available",
+    ),
+}
+
+
+def build_faction_thread_embeds(faction_key: str) -> list[discord.Embed]:
+    """Return [embed1, embed2, embed3] for one faction's suit-progression thread.
+
+    embed1 — all 1.0 suits, levels 1–12 (inline fields per suit)
+    embed2 — top-tier disguise, levels 13–50
+    embed3 — 2.0 top-tier, levels 8–50
+    """
+    meta       = FACTION_META[faction_key]
+    label      = meta["label"]
+    currency   = meta["currency"]
+    emoji      = meta["emoji"]
+    color      = meta["color"]
+    acts_texts = _THREAD_ACTIVITIES[faction_key]
+    suits      = SUITS_BY_FACTION[label]
+    activities = FACTION_ACTIVITIES[faction_key]
+    best_act   = max(activities, key=lambda a: a.avg_pts)
+    best_short = _ACT_SHORT.get(best_act.name, best_act.name.split()[0])
+
+    top_abbr, top_name = suits[-1]
+    _, top_chart, _    = SUITS[top_abbr]
+
+    def _runs(quota: int) -> str:
+        if quota == 0:
+            return "Maxed"
+        return str(max(1, math.ceil(quota / best_act.avg_pts)))
+
+    # ── Embed 1: All 1.0 Suits (Lvl 1–12) ──────────────────────────────────
+    e1 = discord.Embed(
+        title=f"{emoji} {label} — 1.0 Suit Progression",
+        description=(
+            f"Points required to promote from each level. All suits earn **{currency}**.\n"
+            f"Run counts assume starting from **0** using **{best_act.name}** "
+            f"({best_act.range_str} pts/run)."
+        ),
+        color=color,
+    )
+    for abbr, name in suits:
+        _, chart_key, _ = SUITS[abbr]
+        level_data = QUOTAS_V1[faction_key].get(chart_key, {})
+        normal_levels = {lv: pts for lv, pts in level_data.items() if lv <= 12}
+        if not normal_levels:
+            continue
+        lines = []
+        for lv in sorted(normal_levels):
+            pts = normal_levels[lv]
+            if pts == 0:
+                lines.append(f"Lvl {lv} — Maxed")
+            else:
+                lines.append(
+                    f"Lvl {lv} — {pts:,} {currency} — {_runs(pts)}× {best_short}"
+                )
+        e1.add_field(name=f"{abbr} — {name}", value="\n".join(lines), inline=True)
+
+    e1.add_field(name="Recommended Activities", value=acts_texts[0], inline=False)
+    e1.set_footer(text="Paws Pendragon TTR • Suit Progression Reference")
+
+    # ── Embed 2: Top-Tier Disguise (Lvl 13–50) ──────────────────────────────
+    top_data_v1    = QUOTAS_V1[faction_key].get(top_chart, {})
+    disguise_lvls  = {lv: pts for lv, pts in top_data_v1.items() if lv >= 13}
+    rows2: list[str] = []
+    for lv in sorted(disguise_lvls):
+        pts = disguise_lvls[lv]
+        if pts == 0:
+            rows2.append(f"Lvl {lv} — Maxed")
+        else:
+            rows2.append(
+                f"Lvl {lv} — {pts:,} {currency} — {_runs(pts)}× {best_short}"
+            )
+
+    e2 = discord.Embed(
+        title=f"{emoji} {label} — {top_name} Disguise (Lvl 13–50)",
+        description="\n".join(rows2),
+        color=color,
+    )
+    e2.add_field(name="Recommended Activities", value=acts_texts[1], inline=False)
+    e2.set_footer(text="Paws Pendragon TTR • Suit Progression Reference")
+
+    # ── Embed 3: 2.0 Top-Tier (Lvl 8–50) ───────────────────────────────────
+    top_data_v2  = QUOTAS_V2.get(top_chart, {})
+    rows3: list[str] = []
+    for lv in sorted(top_data_v2):
+        pts = top_data_v2[lv]
+        if pts == 0:
+            rows3.append(f"Lvl {lv} — Maxed")
+        else:
+            n = max(1, math.ceil(pts / best_act.avg_pts))
+            rows3.append(
+                f"Lvl {lv} — {pts:,} {currency} — {n}× {best_short}"
+            )
+
+    e3 = discord.Embed(
+        title=f"{emoji} {label} — 2.0 {top_name} (Lvl 8–50)",
+        description="\n".join(rows3),
+        color=color,
+    )
+    e3.add_field(name="Recommended Activities", value=acts_texts[2], inline=False)
+    e3.set_footer(text="Paws Pendragon TTR • Suit Progression Reference")
+
+    return [e1, e2, e3]
+
+
 # ── DROPDOWN CALCULATE FLOW ───────────────────────────────────────────────────
 
 class _CalcView(discord.ui.View):

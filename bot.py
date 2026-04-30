@@ -104,7 +104,7 @@ from config import Config
 from formatters import FORMATTERS, format_doodles, format_information, format_sillymeter
 from ttr_api import TTRApiClient
 from Console import run_console, clear_maintenance_on_startup
-from calculate import register_calculate, build_suit_calculator_embeds
+from calculate import register_calculate, build_suit_calculator_embeds, build_faction_thread_embeds
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -126,6 +126,14 @@ BANNED_FILE    = Path(__file__).with_name("banned_users.json")
 ANNOUNCEMENT_TITLE       = "<:Lav:1499503216084390019> Paws Pendragon Dev Notice <:Lav:1499503216084390019>"
 ANNOUNCEMENT_TTL_SECONDS = 30 * 60
 DOODLE_REFRESH_INTERVAL  = 12 * 60 * 60  # 12 hours in seconds
+
+_FACTION_ORDER        = ("sellbot", "cashbot", "lawbot", "bossbot")
+_FACTION_THREAD_NAMES = {
+    "sellbot": "Sellbot Suits",
+    "cashbot": "Cashbot Suits",
+    "lawbot":  "Lawbot Suits",
+    "bossbot": "Bossbot Suits",
+}
 
 # Shown to any guild owner whose server fails the allowlist check.
 CLOSED_ACCESS_MSG = (
@@ -388,6 +396,7 @@ class TTRBot(discord.AutoShardedClient):
                 topic="Cog suit disguise calculator — use /calculate here.",
             )
         await self._ensure_suit_calculator_pin(guild.id, calc_ch)
+        await self._ensure_suit_threads(guild.id, calc_ch)
         await self._save_state()
 
     async def _send_placeholder(self, key: str, channel: discord.TextChannel) -> discord.Message:
@@ -471,6 +480,100 @@ class TTRBot(discord.AutoShardedClient):
         if verified_ids:
             gs["suit_calculator"] = {"channel_id": channel.id, "message_ids": verified_ids}
 
+    async def _ensure_suit_threads(
+        self, guild_id: int, channel: discord.TextChannel,
+    ) -> None:
+        """Post or edit the 3 static embeds inside each of the 4 faction threads."""
+        gs          = self._guild_state(guild_id)
+        suit_threads: dict = gs.setdefault("suit_threads", {})
+
+        for faction_key in _FACTION_ORDER:
+            thread_name = _FACTION_THREAD_NAMES[faction_key]
+            embeds      = build_faction_thread_embeds(faction_key)
+            entry       = suit_threads.get(faction_key, {})
+            thread_id   = int(entry.get("thread_id", 0)) if isinstance(entry, dict) else 0
+            msg_ids: list[int] = entry.get("message_ids", []) if isinstance(entry, dict) else []
+
+            # Locate existing thread
+            thread: discord.Thread | None = None
+            if thread_id:
+                thread = channel.guild.get_thread(thread_id)
+                if thread is None:
+                    try:
+                        thread = await channel.guild.fetch_channel(thread_id)  # type: ignore[assignment]
+                    except (discord.NotFound, discord.HTTPException):
+                        thread = None
+
+            if thread is None:
+                for t in channel.threads:
+                    if t.name == thread_name:
+                        thread = t
+                        break
+
+            # Create thread if still missing
+            if thread is None:
+                try:
+                    thread = await channel.create_thread(
+                        name=thread_name,
+                        auto_archive_duration=10080,
+                        type=discord.ChannelType.public_thread,
+                    )
+                    log.info("[suit-threads] Created thread '%s' guild=%s", thread_name, guild_id)
+                except discord.Forbidden:
+                    log.warning("[suit-threads] No permission to create thread '%s' guild=%s",
+                                thread_name, guild_id)
+                    continue
+                except discord.HTTPException as exc:
+                    log.warning("[suit-threads] Failed to create thread '%s': %s", thread_name, exc)
+                    continue
+
+            # Unarchive if needed so we can post/edit
+            if getattr(thread, "archived", False):
+                try:
+                    await thread.edit(archived=False)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+            # Post or edit the 3 embeds
+            verified_ids: list[int] = []
+            for i, embed in enumerate(embeds):
+                mid = msg_ids[i] if i < len(msg_ids) else None
+                if mid:
+                    try:
+                        msg = await thread.fetch_message(mid)
+                        await msg.edit(embed=embed)
+                        verified_ids.append(msg.id)
+                        log.info("[suit-threads] Edited embed %d/3 in '%s' guild=%s",
+                                 i + 1, thread_name, guild_id)
+                        continue
+                    except discord.NotFound:
+                        pass
+                    except discord.HTTPException as exc:
+                        log.warning("[suit-threads] Could not edit embed %d in '%s': %s",
+                                    i + 1, thread_name, exc)
+                try:
+                    new_msg = await thread.send(embed=embed)
+                    verified_ids.append(new_msg.id)
+                    log.info("[suit-threads] Posted embed %d/3 in '%s' guild=%s",
+                             i + 1, thread_name, guild_id)
+                except discord.Forbidden:
+                    log.warning("[suit-threads] No send permission in thread '%s' guild=%s",
+                                thread_name, guild_id)
+                    break
+                except discord.HTTPException as exc:
+                    log.warning("[suit-threads] Failed to post embed %d in '%s': %s",
+                                i + 1, thread_name, exc)
+
+            # Lock thread so only the bot can post
+            try:
+                await thread.edit(locked=True, archived=False)
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.debug("[suit-threads] Could not lock '%s': %s", thread_name, exc)
+
+            suit_threads[faction_key] = {"thread_id": thread.id, "message_ids": verified_ids}
+
+        gs["suit_threads"] = suit_threads
+
     async def _refresh_suit_calculator_all_guilds(self) -> None:
         """Refresh the suit-calculator embeds for every tracked guild."""
         calc_name = self.config.channel_suit_calculator
@@ -496,6 +599,7 @@ class TTRBot(discord.AutoShardedClient):
                 continue
             try:
                 await self._ensure_suit_calculator_pin(guild_id, channel)
+                await self._ensure_suit_threads(guild_id, channel)
                 updated += 1
             except Exception:
                 log.exception("[suit-calc] Refresh failed for guild %s", guild_id)
