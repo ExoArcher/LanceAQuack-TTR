@@ -50,8 +50,8 @@ CASHBOT_ACTIVITIES = [
     Activity("Coin Mint",       702,   807),
 ]
 LAWBOT_ACTIVITIES = [
-    Activity("Bullion Mint",  1_626, 1_850),
-    Activity("Coin Mint",       702,   807),
+    Activity("DA Office — Senior Wing",  1_854, 2_082),
+    Activity("DA Office — Junior Wing",    781,   889),
 ]
 BOSSBOT_ACTIVITIES = [
     Activity("The Final Fringe",  2_097, 2_305),
@@ -309,6 +309,26 @@ QUOTAS_V2: dict[str, dict[int, int]] = {
 
 def _norm(s: str) -> str:
     return "".join(c for c in s.lower() if c.isalnum())
+
+
+def parse_level(raw: str) -> tuple[int, bool]:
+    """
+    Parse level input, returning (level_number, is_v2).
+
+    Accepts plain integers ("12") or 2.0-flagged strings ("12.0", "12v2").
+    Returns (-1, False) if the level number cannot be parsed.
+    """
+    s = raw.strip()
+    is_v2 = False
+    for suffix in ("2.0", ".0", "v2"):
+        if s.lower().endswith(suffix):
+            s = s[: -len(suffix)].strip()
+            is_v2 = True
+            break
+    try:
+        return int(s), is_v2
+    except ValueError:
+        return -1, is_v2
 
 
 def resolve_suit(raw: str) -> tuple[str, str, str, str, bool] | None:
@@ -578,16 +598,28 @@ def register_calculate(bot) -> None:
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.describe(
         suit="Suit name or abbreviation, e.g. MH, TBC, Robber Baron, BW2.0",
-        level="Level number shown next to your suit in-game (e.g. 12 for MH12)",
+        level="Level number (e.g. 12). Append .0 for a 2.0 suit (e.g. 12.0) — or add 2.0 to the suit name instead.",
         current_points="Points already earned toward this level's quota (0 = just ranked up)",
     )
     async def calculate(
         interaction: discord.Interaction,
         suit: str,
-        level: app_commands.Range[int, 1, 50],
+        level: str,
         current_points: app_commands.Range[int, 0, 500_000],
     ) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # Parse level — accepts "12", "12.0", or "12v2"; 2.0 flag may come
+        # from either the suit string ("MH2.0") or the level string ("12.0").
+        level_num, level_v2 = parse_level(level)
+        if level_num < 1 or level_num > 50:
+            await interaction.followup.send(
+                f"❌  **Invalid level:** `{level}`\n"
+                "Enter the number shown next to your suit in-game (1–50). "
+                "Add `.0` to the level if you have a 2.0 suit, e.g. `12.0`.",
+                ephemeral=True,
+            )
+            return
 
         result = resolve_suit(suit)
         if result is None:
@@ -598,28 +630,34 @@ def register_calculate(bot) -> None:
             )
             return
 
-        user_abbr, suit_name, faction, chart_key, is_v2 = result
+        user_abbr, suit_name, faction, chart_key, suit_v2 = result
+        # Either source can declare 2.0
+        is_v2 = suit_v2 or level_v2
+        # Validate 2.0 only applies to top-tier suits
+        if is_v2 and user_abbr not in _V2_SUITS:
+            is_v2 = False
+
         lo, hi = valid_level_range(user_abbr, faction, chart_key, is_v2)
 
-        if level < lo or level > hi:
+        if level_num < lo or level_num > hi:
             await interaction.followup.send(
                 f"❌  **{suit_name}{'(2.0)' if is_v2 else ''}** uses levels "
-                f"**{lo}–{hi}**. You entered `{level}`.",
+                f"**{lo}–{hi}**. You entered `{level_num}`.",
                 ephemeral=True,
             )
             return
 
-        quota = get_quota(user_abbr, faction, chart_key, level, is_v2)
+        quota = get_quota(user_abbr, faction, chart_key, level_num, is_v2)
         if quota is None:
             await interaction.followup.send(
-                f"❌  No data found for **{suit_name}** level `{level}`.",
+                f"❌  No data found for **{suit_name}** level `{level_num}`.",
                 ephemeral=True,
             )
             return
 
         if quota == 0:
             await interaction.followup.send(
-                f"🎉  **{suit_name}** at level {level} is **Maxed** — "
+                f"🎉  **{suit_name}** at level {level_num} is **Maxed** — "
                 "nothing left to earn!",
                 ephemeral=True,
             )
@@ -637,6 +675,6 @@ def register_calculate(bot) -> None:
         pts     = quota - current_points
         options = build_options(pts, FACTION_ACTIVITIES[faction], meta["currency"])
         embed   = build_result_embed(
-            suit_name, faction, level, current_points, quota, is_v2, options,
+            suit_name, faction, level_num, current_points, quota, is_v2, options,
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
