@@ -38,7 +38,15 @@ HELP_TEXT = (
     "  restart        -- Notify all servers of a restart, then restart the process.\n"
     "  maintenance / maint -- Toggle maintenance mode banner on/off in all server channels.\n"
     "  announce <msg> -- Broadcast a message to every tracked server (auto-deletes in 30 min).\n"
+    "  rejoin         -- DM every server owner with a re-invite link, run teardown, then leave all servers.\n"
     "  help           -- Show this list."
+)
+
+_INVITE_LINK = (
+    "https://discord.com/oauth2/authorize"
+    "?client_id=1496971496709689654"
+    "&permissions=7318489585232976"
+    "&scope=bot+applications.commands"
 )
 
 _MAINT_MODE_FILE = Path(__file__).with_name("maintenance_mode.json")
@@ -98,6 +106,10 @@ async def run_console(bot) -> None:
                 print("[console] Usage: announce <message text>", flush=True)
             else:
                 await _handle_announce(bot, announce_text)
+
+        elif cmd == "rejoin":
+            await _handle_rejoin(bot)
+            break
 
         else:
             print(f"[console] Unknown command: '{cmd}'.\n{HELP_TEXT}", flush=True)
@@ -365,6 +377,85 @@ def _channel_id_for_feed(bot, guild_id_str: str, feed_key: str) -> int | None:
         return int(entry.get("channel_id", 0)) or None
     except (TypeError, ValueError):
         return None
+
+
+# ── Rejoin ────────────────────────────────────────────────────────────────────
+
+async def _handle_rejoin(bot) -> None:
+    """
+    For every guild the bot is in:
+      1. DM the server owner with a re-invite message and the new permissions link.
+      2. Remove the guild from state (teardown).
+      3. Leave the guild.
+    """
+    print("[console] REJOIN command received -- notifying owners and leaving all servers...", flush=True)
+    log.info("[console] Rejoin initiated.")
+
+    guilds = list(bot.guilds)
+    if not guilds:
+        print("[console] No guilds to process.", flush=True)
+        return
+
+    dmed = 0
+    failed_dm = 0
+    left = 0
+    failed_leave = 0
+
+    for guild in guilds:
+        # ── DM the owner ──────────────────────────────────────────────────
+        owner = guild.owner
+        if owner is None:
+            try:
+                owner = await bot.fetch_user(guild.owner_id)
+            except Exception:
+                owner = None
+
+        if owner:
+            try:
+                await owner.send(
+                    f"👋 **Paws Pendragon is undergoing a major update requiring different permissions.**\n\n"
+                    f"Please use this new invite link to re-add me to **{guild.name}**:\n"
+                    f"{_INVITE_LINK}\n\n"
+                    f"**New permissions include:**\n"
+                    f"• View Channels & Read Message History\n"
+                    f"• Send Messages & Send Messages in Threads\n"
+                    f"• Embed Links & Attach Files\n"
+                    f"• Manage Messages & Manage Channels\n"
+                    f"• Create Public & Private Threads\n"
+                    f"• Use External Emojis & Use Application Commands\n"
+                    f"• Add Reactions & Mention Everyone\n\n"
+                    f"After re-inviting, run `/pd-setup` to get back to where you left off. 🐾"
+                )
+                dmed += 1
+                log.info("[console] Rejoin DM sent to owner of %s (%s)", guild.name, guild.id)
+            except Exception as exc:
+                log.warning("[console] Could not DM owner of %s: %s", guild.name, exc)
+                failed_dm += 1
+        else:
+            log.warning("[console] Could not resolve owner for guild %s", guild.id)
+            failed_dm += 1
+
+        # ── Teardown (remove from state) ──────────────────────────────────
+        try:
+            bot.state.get("guilds", {}).pop(str(guild.id), None)
+            await bot._save_state()
+        except Exception as exc:
+            log.warning("[console] State teardown failed for %s: %s", guild.name, exc)
+
+        # ── Leave the guild ───────────────────────────────────────────────
+        try:
+            await guild.leave()
+            left += 1
+            log.info("[console] Left guild %s (%s)", guild.name, guild.id)
+        except Exception as exc:
+            log.warning("[console] Could not leave %s: %s", guild.name, exc)
+            failed_leave += 1
+
+    print(
+        f"[console] Rejoin complete -- {dmed} owner(s) DMed ({failed_dm} failed), "
+        f"{left} server(s) left ({failed_leave} failed).",
+        flush=True,
+    )
 
 
 # ── Shared broadcast helper ───────────────────────────────────────────────────
