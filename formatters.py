@@ -358,7 +358,7 @@ DEPARTMENTS = {
     "m": "Cashbot",  # some docs use 'm' for Cashbot historically
 }
 
-TTR_COLOR = 0x26A2EC  # TTR-ish blue
+TTR_COLOR = 0xa981ce
 
 
 # ── FORMAT_INVASIONS ──────────────────────────────────────────────────────────
@@ -760,31 +760,36 @@ def _district_unavailable(status: str) -> bool:
     }
 
 
-def format_information(
+def _invasion_remaining(progress: str) -> int | None:
+    """Parse 'defeated/total' progress string → cogs remaining, or None."""
+    try:
+        left, right = str(progress).split("/")
+        defeated    = int(left.strip().replace(",", ""))
+        total       = int(right.strip().replace(",", ""))
+        return max(0, total - defeated)
+    except Exception:
+        return None
+
+
+def format_districts_invasions(
     *,
     invasions: dict[str, Any] | None,
     population: dict[str, Any] | None,
-    fieldoffices: dict[str, Any] | None,
 ) -> discord.Embed:
-    """One combined embed for the #tt-information channel.
-
-    Districts come from the population API, with invasion info merged in.
-    Field Offices come from the field-offices API (sorted ★★★ → ★).
-    """
-    pop_by         = (population or {}).get("populationByDistrict", {}) or {}
-    status_by      = (population or {}).get("statusByDistrict", {}) or {}
+    """Embed 1 of 3: districts and active cog invasions."""
+    pop_by           = (population or {}).get("populationByDistrict", {}) or {}
+    status_by        = (population or {}).get("statusByDistrict", {}) or {}
     active_invasions = (invasions or {}).get("invasions", {}) or {}
-    total_pop      = (population or {}).get("totalPopulation")
+    total_pop        = (population or {}).get("totalPopulation")
 
     if isinstance(total_pop, int):
-        title = f"ToonTown Information [ {total_pop:,} Toons Online ]"
+        title = f"ToonTown Districts [ {total_pop:,} Toons Online ]"
     else:
-        title = "ToonTown Information"
+        title = "ToonTown Districts"
     embed = discord.Embed(title=title, color=TTR_COLOR)
 
     parts: list[str] = []
 
-    # Districts (population + invasions combined) ──────────────────────
     if pop_by:
         district_blocks: list[str] = []
         for district in sorted(pop_by.keys(), key=str.lower):
@@ -805,9 +810,12 @@ def format_information(
 
             line2_parts: list[str] = []
             if inv:
-                cog_type = _fmt_cog_type(inv.get("type") or "")
-                progress = inv.get("progress", "?/?")
+                cog_type  = _fmt_cog_type(inv.get("type") or "")
+                progress  = inv.get("progress", "?/?")
+                remaining = _invasion_remaining(progress)
                 line2_parts.append(_bi(f"[{cog_type} {progress}]"))
+                if remaining is not None and remaining < 750:
+                    line2_parts.append(_b("[Ending Soon]"))
             if _is_safe_district(district):
                 line2_parts.append(_b(f"[{SAFE_EMOJI}]"))
             if _is_speedchat_only(district):
@@ -837,7 +845,22 @@ def format_information(
     else:
         parts.append("**Districts**\n*Population data unavailable.*")
 
-    # Field Offices ────────────────────────────────────────────────────
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    parts.append(f"***Last updated: <t:{now_epoch}:R>***")
+
+    description = "\n\n".join(parts)
+    if len(description) > 4000:
+        description = description[:3997] + "…"
+    embed.description = description
+    return embed
+
+
+def format_field_offices_embed(
+    *,
+    fieldoffices: dict[str, Any] | None,
+) -> discord.Embed:
+    """Embed 2 of 3: active Sellbot field offices."""
+    embed   = discord.Embed(title=":office: Active Field Offices", color=TTR_COLOR)
     offices = (fieldoffices or {}).get("fieldOffices", {}) or {}
 
     fo_blocks: list[str] = []
@@ -865,7 +888,7 @@ def format_information(
             except (TypeError, ValueError):
                 zone_id = 0
             street     = ZONE_NAMES.get(zone_id, f"Zone {zone_str}")
-            difficulty = int(fo.get("difficulty", 0)) + 1  # zero-indexed
+            difficulty = int(fo.get("difficulty", 0)) + 1
             stars      = STAR_GREAT * difficulty
             annexes    = fo.get("annexes", "?")
             is_full    = not fo.get("open")
@@ -877,18 +900,25 @@ def format_information(
                 line2_parts.append(_b("[FULL]"))
             fo_blocks.append(f"{line1}\n{' '.join(line2_parts)}")
 
-    parts.append("**Field Offices**\n\n" + "\n\n".join(fo_blocks))
-
-    # Last updated timestamp ───────────────────────────────────────────
     now_epoch = int(datetime.now(timezone.utc).timestamp())
-    parts.append(f"***Last updated: <t:{now_epoch}:R>***")
-
-    description = "\n\n".join(parts)
+    description = "\n\n".join(fo_blocks) + f"\n\n***Last updated: <t:{now_epoch}:R>***"
     if len(description) > 4000:
         description = description[:3997] + "…"
     embed.description = description
-
     return embed
+
+
+def format_information(
+    *,
+    invasions: dict[str, Any] | None,
+    population: dict[str, Any] | None,
+    fieldoffices: dict[str, Any] | None,
+) -> list[discord.Embed]:
+    """Return [districts_embed, field_offices_embed] for /ttrinfo DMs."""
+    return [
+        format_districts_invasions(invasions=invasions, population=population),
+        format_field_offices_embed(fieldoffices=fieldoffices),
+    ]
 
 
 # ── FORMAT_SILLYMETER ─────────────────────────────────────────────────────────
@@ -1061,11 +1091,11 @@ def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
 
 FORMATTERS = {
     "information": lambda d: [
-        format_information(
+        format_districts_invasions(
             invasions=d.get("invasions"),
             population=d.get("population"),
-            fieldoffices=d.get("fieldoffices"),
         ),
+        format_field_offices_embed(fieldoffices=d.get("fieldoffices")),
         format_sillymeter(d.get("sillymeter")),
     ],
     "doodles": lambda d: format_doodles(d.get("doodles")),

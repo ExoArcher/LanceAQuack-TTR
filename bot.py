@@ -1012,10 +1012,11 @@ class TTRBot(discord.AutoShardedClient):
             fieldoffices = None if isinstance(results[2], BaseException) else results[2]
             sillymeter   = None if isinstance(results[3], BaseException) else results[3]
 
-            info_embed  = format_information(invasions=invasions, population=population, fieldoffices=fieldoffices)
+            info_embeds = format_information(invasions=invasions, population=population, fieldoffices=fieldoffices)
             silly_embed = format_sillymeter(sillymeter)
             try:
-                await interaction.user.send(embed=info_embed)
+                for embed in info_embeds:
+                    await interaction.user.send(embed=embed)
                 await interaction.user.send(embed=silly_embed)
                 await interaction.followup.send("Check your DMs! 📬", ephemeral=True)
             except discord.Forbidden:
