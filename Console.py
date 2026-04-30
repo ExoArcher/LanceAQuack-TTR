@@ -9,6 +9,7 @@ Available commands:
     restart     -- Broadcasts a restarting notice to all servers, then hot-restarts the process.
     maintenance -- Toggles maintenance mode on/off. Posts a banner in both
                    #tt-information and #tt-doodles in every tracked server when on.
+    announce    -- Broadcast a message to every tracked server (auto-deletes in 30 min).
     help        -- List available console commands.
 """
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import select
 import sys
 import time
 import logging
@@ -27,40 +29,51 @@ import discord
 
 log = logging.getLogger("ttr-bot.console")
 
-COMMANDS = ("stop", "restart", "maintenance", "announce")
-
 HELP_TEXT = (
     "[console] Available commands:\n"
     "  stop           -- Notify all servers of maintenance, then shut down.\n"
     "  restart        -- Notify all servers of a restart, then restart the process.\n"
     "  maintenance    -- Toggle maintenance mode banner on/off in all server channels.\n"
-    "  announce <msg> -- Broadcast a message to every tracked server (auto-deletes in 30 min)."
+    "  announce <msg> -- Broadcast a message to every tracked server (auto-deletes in 30 min).\n"
+    "  help           -- Show this list."
 )
 
 _MAINT_MODE_FILE = Path(__file__).with_name("maintenance_mode.json")
 
+# How long (seconds) _readline_poll waits for stdin before returning None.
+# Kept short so the bot can notice it has closed within this many seconds.
+_POLL_TIMEOUT = 2.0
 
-# ---------------------------------------------------------------------------
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Console loop
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def run_console(bot) -> None:
     loop = asyncio.get_running_loop()
-    log.info("[console] Console command listener started. Type 'stop', 'restart', or 'maintenance'.")
+    log.info("[console] Console command listener started.")
 
     while True:
+        # Exit immediately if the bot is already shutting down.
+        if bot.is_closed():
+            log.info("[console] Bot is closed -- console listener exiting.")
+            break
+
         try:
-            line = await loop.run_in_executor(None, _readline_safe)
+            line = await loop.run_in_executor(None, _readline_poll)
         except Exception as exc:
             log.warning("[console] stdin read error: %s", exc)
             break
 
+        # None  → stdin closed (EOF); stop looping.
+        # ""    → poll timeout with no data; loop back and check bot state.
         if line is None:
             log.info("[console] stdin closed -- console listener exiting.")
             break
+        if line == "":
+            continue
 
         cmd = line.strip().lower()
-
         if not cmd:
             continue
 
@@ -89,17 +102,31 @@ async def run_console(bot) -> None:
             print(f"[console] Unknown command: '{cmd}'.\n{HELP_TEXT}", flush=True)
 
 
-def _readline_safe():
+def _readline_poll() -> str | None:
+    """
+    Block for up to _POLL_TIMEOUT seconds waiting for a line on stdin.
+
+    Returns:
+        str   -- a line of input (including the newline) if one arrived.
+        ""    -- timeout elapsed with no input (caller should loop).
+        None  -- stdin is closed / EOF.
+
+    Using select() means the thread is never stuck indefinitely, so Python
+    can join it cleanly when the process shuts down.
+    """
     try:
+        ready, _, _ = select.select([sys.stdin], [], [], _POLL_TIMEOUT)
+        if not ready:
+            return ""          # timeout — no data yet
         line = sys.stdin.readline()
-        return line if line else None
+        return line if line else None   # empty string from readline() == EOF
     except Exception:
         return None
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Stop
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def _handle_stop(bot) -> None:
     print("[console] STOP command received -- notifying servers and shutting down...", flush=True)
@@ -124,9 +151,9 @@ async def _handle_stop(bot) -> None:
     await bot.close()
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Restart
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def _handle_restart(bot) -> None:
     print("[console] RESTART command received -- notifying servers and restarting...", flush=True)
@@ -153,9 +180,9 @@ async def _handle_restart(bot) -> None:
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Maintenance mode toggle
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def _handle_maintenance(bot) -> None:
     """
@@ -168,11 +195,11 @@ async def _handle_maintenance(bot) -> None:
     stored = _load_maint_mode()
 
     if stored:
-        # --- TURN OFF ---
+        # ── TURN OFF ──
         print("[console] Maintenance mode OFF -- removing banners...", flush=True)
         log.info("[console] Maintenance mode disabling.")
         removed = 0
-        failed = 0
+        failed  = 0
 
         for guild_id_str, channels in stored.items():
             for feed_key, msg_id in channels.items():
@@ -199,7 +226,7 @@ async def _handle_maintenance(bot) -> None:
         )
 
     else:
-        # --- TURN ON ---
+        # ── TURN ON ──
         print("[console] Maintenance mode ON -- posting banners...", flush=True)
         log.info("[console] Maintenance mode enabling.")
 
@@ -217,9 +244,9 @@ async def _handle_maintenance(bot) -> None:
         embed.set_footer(text="LanceAQuack TTR • Maintenance Mode Active")
 
         guilds_block = bot.state.get("guilds", {})
-        new_stored = {}
-        sent = 0
-        failed = 0
+        new_stored   = {}
+        sent         = 0
+        failed       = 0
 
         for guild_id_str, gs in list(guilds_block.items()):
             guild_msgs = {}
@@ -255,15 +282,15 @@ async def _handle_maintenance(bot) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Announce
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def _handle_announce(bot, text: str) -> None:
     """
-    Broadcast an announcement to every tracked guild's #tt-information channel.
-    Delegates to bot._broadcast_announcement() which posts a yellow embed that
-    auto-deletes after 30 minutes.
+    Broadcast an announcement to every tracked guild's feed channels.
+    Delegates to bot._broadcast_announcement() which posts a yellow embed
+    that auto-deletes after 30 minutes.
     """
     print(f"[console] ANNOUNCE: {text!r}", flush=True)
     log.info("[console] Announce broadcast: %s", text)
@@ -287,9 +314,9 @@ async def _handle_announce(bot, text: str) -> None:
         print(f"[console] Announce failed: {exc}", flush=True)
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # State helpers
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _load_maint_mode() -> dict:
     try:
@@ -309,8 +336,8 @@ def _save_maint_mode(data: dict) -> None:
         log.warning("[console] Could not save maintenance_mode.json: %s", exc)
 
 
-def _channel_id_for_feed(bot, guild_id_str: str, feed_key: str):
-    gs = bot.state.get("guilds", {}).get(guild_id_str, {})
+def _channel_id_for_feed(bot, guild_id_str: str, feed_key: str) -> int | None:
+    gs    = bot.state.get("guilds", {}).get(guild_id_str, {})
     entry = gs.get(feed_key)
     if not entry:
         return None
@@ -320,13 +347,13 @@ def _channel_id_for_feed(bot, guild_id_str: str, feed_key: str):
         return None
 
 
-# ---------------------------------------------------------------------------
-# Shared broadcast helper (info channel only -- used by stop/restart)
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared broadcast helper (info channel only -- used by stop / restart)
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def _broadcast_to_all_info_channels(bot, embed: discord.Embed) -> None:
     guilds_block = bot.state.get("guilds", {})
-    sent = 0
+    sent   = 0
     failed = 0
 
     for guild_id_str, gs in list(guilds_block.items()):
