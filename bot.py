@@ -139,7 +139,7 @@ CLOSED_ACCESS_MSG = (
 # TTRBot
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TTRBot(discord.Client):
+class TTRBot(discord.AutoShardedClient):
     def __init__(self, config: Config) -> None:
         intents = discord.Intents.default()
         intents.guilds = True
