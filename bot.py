@@ -98,6 +98,7 @@ from config import Config
 from formatters import FORMATTERS, format_doodles, format_information, format_sillymeter
 from ttr_api import TTRApiClient
 from Console import run_console
+from calculate import register_calculate
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1148,6 +1149,9 @@ class TTRBot(discord.Client):
                 log.warning("Could not write teardown log: %s", exc)
 
         self._log_teardown = self_log_teardown
+
+        # -- /calculate  (all users, guild + user install) ----------------
+        register_calculate(self)
 
 
 

@@ -1,4 +1,4 @@
-# LanceAQuack TTR – V1.2
+# LanceAQuack TTR – V1.3
 
 Multi-guild Discord bot that mirrors the public Toontown Rewritten APIs into live-updating channels. One hosted instance can serve multiple Discord servers from a single allowlist. Also installable as a **User App** — no server required.
 
@@ -24,6 +24,7 @@ Available in servers, DMs, and group chats. Work as both a server bot and a pers
 |---|---|
 | `/ttrinfo` | DMs you the current district populations, cog invasions, field offices, and Silly Meter status. |
 | `/doodleinfo` | DMs you the full doodle availability list with trait ratings and a buying guide. |
+| `/calculate <suit> <level> <current_points>` | Shows how many points you still need to level up your cog suit disguise, with activity recommendations. Accepts full names or abbreviations; add `2.0` for 2.0 suits (e.g. `RB2.0`). |
 | `/invite-app` | DMs you the link to add LanceAQuack TTR to your personal Discord account. |
 | `/invite-server` | DMs you the link to add LanceAQuack TTR to a server. |
 | `/helpme` | DMs you the full command list. Falls back to ephemeral if DMs are closed. |
@@ -98,6 +99,7 @@ For full setup instructions see **`DEPLOY.md`**.
 |---|---|
 | `bot.py` | Multi-guild bot core. Commands, refresh loop, allowlist enforcement, ban enforcement, maintenance notices. |
 | `Console.py` | Hosting panel stdin handler. Commands: `stop`, `restart`, `maintenance`, `announce`. |
+| `calculate.py` | `/calculate` command logic. Full suit point tables for all 4 factions, name resolution, activity recommendations. |
 | `config.py` | Loads `.env` into a typed `Config`. Parses `GUILD_ALLOWLIST`, `BOT_ADMIN_IDS`, etc. |
 | `formatters.py` | Renders TTR API JSON into Discord embeds (information, doodles, Silly Meter). |
 | `ttr_api.py` | Async aiohttp client for the public TTR endpoints. |
@@ -117,7 +119,10 @@ For full setup instructions see **`DEPLOY.md`**.
 
 ## Version history
 
-**V1.2** — Current release.
+**V1.3** — Current release.
+- `/calculate <suit> <level> <current_points>` — suit disguise point calculator for all 4 factions. Accepts full names or abbreviations; handles 2.0 suits (`RB2.0`, `TBC2.0`, etc.). Returns points still needed and ranked activity recommendations with per-run yield ranges.
+
+**V1.2**
 - Console command: `announce <text>` — broadcasts to all servers from the hosting panel (replaces `/laq-announce`).
 - Console command: `maintenance` — toggles a persistent orange banner in both `#tt-information` and `#tt-doodles` across all guilds. State survives restarts via `maintenance_mode.json`.
 - Console commands: `stop` and `restart` — each notifies all servers before acting.
@@ -127,15 +132,4 @@ For full setup instructions see **`DEPLOY.md`**.
 **V1.1**
 - User App install support (`/ttrinfo`, `/doodleinfo`, `/helpme`, `/invite-app`, `/invite-server` work outside servers).
 - Silly Meter embed in `#tt-information` with team descriptions, accumulated points, and percentage display.
-- Ban system with persistent `banned_users.json` records.
-- Maintenance embed broadcast on shutdown; auto-deleted on next startup.
-- First-use welcome DM for new User App installs.
-- Auto-update from GitHub on every startup using hash comparison to prevent restart loops.
-- Teardown logging to `teardown_log.txt`.
-- Rate limit protection: 3-second sleep between embed edits.
-
-**V1.0** — Cybrancee hosting edition.
-- Multi-guild rewrite with `/laq-setup`, allowlist enforcement, and per-guild message persistence.
-- Doodle tier guide with trait ratings.
-- District, invasion, and field office live embeds.
-- Panel announcement support via `panel_announce.txt`.
+- Ban syst
