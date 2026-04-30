@@ -2,28 +2,33 @@
 """
 formatters.py — Discord embed builders for LanceAQuack TTR.
 
-Produces three embeds for #tt-information (districts+invasions / field offices
-/ silly meter) and a per-playground set for #tt-doodles.
+All field names match the OFFICIAL TTR public API documentation exactly.
+  https://github.com/toontown-rewritten/api-doc
 
-FORMATTERS maps feed_key -> callable(api_data) -> list[discord.Embed].
-
-TTR public API shapes (https://github.com/toontown-rewritten/api-doc):
+API shapes:
   invasions    {"invasions": {district: {"type": str, "progress": "N/M",
-                               "asOf": int, "mega": bool}}, "asOf": int}
+                               "asOf": int}}, "lastUpdated": int}
   population   {"populationByDistrict": {district: int},
-                "totalPopulation": int, "asOf": int}
+                "totalPopulation": int, "lastUpdated": int}
   fieldoffices {"fieldOffices": {zone_id: {"department": str,
-                                  "difficulty": int, "annexesRemaining": int,
-                                  "open": bool, "asOf": int}}, "asOf": int}
-  sillymeter   {"winner":    {teamName, description} | null,
-                "teams":     [{teamIndex, teamName, description}] | null,
-                "nextTeams": [{teamIndex, teamName, description}] | null,
-                "phase": "active" | "cooldown" | "sneak-peak",
-                "sillymeterPoints": int,       (active phase only)
-                "maxSillyMeterPoints": int,    (active phase only)
+                                  "difficulty": int,   ← zero-indexed
+                                  "annexes": int,      ← NOT annexesRemaining
+                                  "open": bool,
+                                  "expiring": int|null}},
+                "lastUpdated": int}
+  sillymeter   {"state": "Active"|"Reward"|"Inactive",
+                "hp": int,                             ← 0-5,000,000
+                "rewards": [str, str, str],            ← team names
+                "rewardDescriptions": [str, str, str], ← team descriptions
+                "winner": str|null,                    ← only in "Reward"
+                "rewardPoints": {team: int}|null,      ← only in "Reward"
+                "nextUpdateTimestamp": int,
                 "asOf": int}
-  doodles      {"doodles": [{name, traits, price, color, playground}],
-                "asOf": int}
+  doodles      {district: {playground: [{"dna": str,
+                                         "traits": [str],
+                                         "cost": int}]}}
+               ← top-level IS the district dict, no wrapper key
+               ← cost field is "cost" NOT "price"
 """
 from __future__ import annotations
 
@@ -37,8 +42,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Custom emoji IDs from .env ────────────────────────────────────────────────
-# NOTE: env var is JELLYBEAN_EMOJI (singular, not JELLYBEANS_EMOJI)
-JELLYBEAN   = os.getenv("JELLYBEAN_EMOJI",  "🫙")
+JELLYBEAN   = os.getenv("JELLYBEAN_EMOJI",  "🫙")   # singular: JELLYBEAN_EMOJI
 COG_EMOJI   = os.getenv("COG_EMOJI",        "⚙️")
 SAFE_EMOJI  = os.getenv("SAFE_EMOJI",       "🛡️")
 INFINITE    = os.getenv("INFINITE_EMOJI",   "♾️")
@@ -55,48 +59,42 @@ MEGA_SAFE_DISTRICTS = frozenset({
     "Blam Canyon", "Gulp Gulch", "Whoosh Rapids", "Zapwood", "Welcome Valley",
 })
 
-# ── Field office zone ID → human-readable name ────────────────────────────────
+# ── Field Office zone ID → street name ───────────────────────────────────────
+# Source: official TTR API documentation zone ID lookup table.
+# These are the ONLY zones where field offices appear.
 ZONE_NAMES: dict[str, str] = {
-    # Toontown Central
-    "2000": "Toontown Central",
-    "2100": "Silly Street",
-    "2200": "Loopy Lane",
-    "2300": "Punchline Place",
-    # Donald's Dock
-    "3000": "Donald's Dock",
-    "3100": "Lighthouse Lane",
-    "3200": "Seaweed Street",
-    "3300": "Barnacle Boulevard",
-    # Daisy Gardens
-    "4000": "Daisy Gardens",
-    "4100": "Elm Street",
-    "4200": "Maple Street",
-    "4300": "Oak Street",
-    # Minnie's Melodyland
-    "5000": "Minnie's Melodyland",
-    "5100": "Alto Avenue",
-    "5200": "Baritone Boulevard",
-    "5300": "Tenor Terrace",
-    # The Brrrgh
-    "6000": "The Brrrgh",
-    "6100": "Walrus Way",
-    "6200": "Sleet Street",
-    "6300": "Polar Place",
-    # Donald's Dreamland
-    "7000": "Donald's Dreamland",
-    "7100": "Lullaby Lane",
-    "7200": "Pajama Place",
-    # Chip 'n Dale's Acorn Acres
-    "9000": "Chip 'n Dale's Acorn Acres",
-    # HQ zones
-    "9100": "Sellbot HQ",
-    "9200": "Cashbot HQ",
-    "9300": "Lawbot HQ",
-    "9400": "Bossbot HQ",
+    # The Brrrgh streets
+    "3100": "Walrus Way",
+    "3200": "Sleet Street",
+    "3300": "Polar Place",
+    # Minnie's Melodyland streets
+    "4100": "Alto Avenue",
+    "4200": "Baritone Boulevard",
+    "4300": "Tenor Terrace",
+    # Daisy Gardens streets
+    "5100": "Elm Street",
+    "5200": "Maple Street",
+    "5300": "Oak Street",
+    # Donald's Dreamland streets
+    "9100": "Lullaby Lane",
+    "9200": "Pajama Place",
 }
 
-# ── Silly Meter team descriptions ─────────────────────────────────────────────
-SILLY_TEAM_DESC: dict[str, str] = {
+# ── Playground display emoji ──────────────────────────────────────────────────
+_PLAYGROUND_EMOJI: dict[str, str] = {
+    "Toontown Central":    "🌐",
+    "Donald's Dock":       "⚓",
+    "Daisy Gardens":       "🌼",
+    "Minnie's Melodyland": "🎵",
+    "The Brrrgh":          "❄️",
+    "Donald's Dreamland":  "🌙",
+}
+
+# ── Silly Meter max HP ────────────────────────────────────────────────────────
+SILLY_MAX_HP = 5_000_000
+
+# ── Silly Meter team descriptions (fallback if API rewardDescriptions missing) ──
+_SILLY_TEAM_DESC: dict[str, str] = {
     "The Silliest":      "Toons are at peak silliness — everything is funnier than usual!",
     "United Toon Front": "All Toons unite under one banner for maximum toony power.",
     "Resistance Rangers":"The Resistance strikes back! Defenders of Toontown stand ready.",
@@ -110,12 +108,9 @@ SILLY_TEAM_DESC: dict[str, str] = {
 }
 
 
-def _team_desc_fallback(name: str | None) -> str:
-    """Fuzzy-match a description from our local table if the API didn't provide one."""
-    if not name:
-        return ""
+def _fallback_desc(name: str) -> str:
     low = name.lower()
-    for key, desc in SILLY_TEAM_DESC.items():
+    for key, desc in _SILLY_TEAM_DESC.items():
         if key.lower() in low:
             return desc
     return ""
@@ -125,14 +120,18 @@ def _team_desc_fallback(name: str | None) -> str:
 
 def _updated_footer() -> str:
     """
-    Footer text showing when the bot last refreshed this embed.
-
-    Uses the current wall-clock time rather than the API's asOf field,
-    because asOf can be stale (e.g. the Silly Meter during cooldown may
-    not have changed for hours, giving a misleading 'Updated 5 days ago').
-    Discord renders <t:unix:R> as a live-updating relative timestamp.
+    Footer text: "Updated <relative timestamp>".
+    Uses current wall-clock time so the footer always shows how recently
+    the bot refreshed — API timestamps can be stale for slow-changing data.
     """
     return f"Updated <t:{int(time.time())}:R>"
+
+
+def _ts_relative(unix: int | float | None) -> str:
+    """Discord relative timestamp, or empty string if None."""
+    if not unix:
+        return ""
+    return f"<t:{int(unix)}:R>"
 
 
 def _safe_get(data: dict | None, *keys: str, default: Any = None) -> Any:
@@ -144,24 +143,6 @@ def _safe_get(data: dict | None, *keys: str, default: Any = None) -> Any:
     return cur
 
 
-def _team_name(team: dict | None) -> str | None:
-    """Extract a team name from a team dict. TTR API uses 'teamName' field."""
-    if not team:
-        return None
-    return team.get("teamName") or team.get("name") or None
-
-
-def _format_team_list(teams: list[dict]) -> str:
-    """Format a list of team dicts into a compact embed field."""
-    lines: list[str] = []
-    for t in teams:
-        tname = _team_name(t) or "?"
-        # Prefer the API-provided description; fall back to our local table
-        tdesc = t.get("description") or _team_desc_fallback(tname)
-        lines.append(f"**{tname}**" + (f"\n*{tdesc}*" if tdesc else ""))
-    return "\n\n".join(lines) or "*No teams listed.*"
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Embed 1 — Districts & Invasions
 # ══════════════════════════════════════════════════════════════════════════════
@@ -171,7 +152,7 @@ def format_information(
     population: dict | None = None,
     fieldoffices: dict | None = None,
 ) -> discord.Embed:
-    """Districts & Invasions embed."""
+    """Districts & Invasions embed (population + invasion data combined)."""
     inv_map = _safe_get(invasions, "invasions") or {}
     pop_map = _safe_get(population, "populationByDistrict") or {}
     total   = _safe_get(population, "totalPopulation") or sum(pop_map.values()) or 0
@@ -183,7 +164,7 @@ def format_information(
         embed.set_footer(text=_updated_footer())
         return embed
 
-    # Sort: invaded first (mega first), then by population descending
+    # Sort: invaded first (mega invasions first), then by population descending
     all_districts = sorted(
         set(pop_map) | set(inv_map),
         key=lambda d: (
@@ -236,7 +217,15 @@ def format_information(
 # ══════════════════════════════════════════════════════════════════════════════
 
 def format_fieldoffices(fieldoffices: dict | None = None) -> discord.Embed:
-    """Field Offices embed."""
+    """
+    Sellbot Field Offices embed.
+
+    API field names (per official docs):
+      difficulty  zero-indexed (0=1★, 1=2★, 2=3★)
+      annexes     remaining annexes (NOT annexesRemaining)
+      open        boolean
+      expiring    epoch timestamp when FO expires (after last annex defeated)
+    """
     fo_map = _safe_get(fieldoffices, "fieldOffices") or {}
 
     embed = discord.Embed(title="🏢  Sellbot Field Offices", color=0xE74C3C)
@@ -251,20 +240,28 @@ def format_fieldoffices(fieldoffices: dict | None = None) -> discord.Embed:
         if not isinstance(fo, dict):
             continue
 
-        location   = ZONE_NAMES.get(str(zone_id), f"Zone {zone_id}")
-        difficulty = max(1, min(3, int(fo.get("difficulty", 1))))
-        stars      = "⭐" * difficulty
-        annexes    = fo.get("annexesRemaining")
-        is_open    = fo.get("open", True)
-        status     = "🟢 Open" if is_open else "🔴 Closed"
+        location = ZONE_NAMES.get(str(zone_id), f"Zone {zone_id}")
 
+        # difficulty is zero-indexed: 0=1★, 1=2★, 2=3★
+        difficulty = int(fo.get("difficulty", 0))
+        stars      = "⭐" * min(3, difficulty + 1)
+
+        # annexes field (NOT annexesRemaining)
+        annexes = fo.get("annexes")
         if annexes is None:
             annex_str = "? annexes remaining"
-        elif int(annexes) == -1:
-            annex_str = f"{INFINITE} Kaboomberg"
+        elif int(annexes) <= 0:
+            expiring = fo.get("expiring")
+            if expiring:
+                annex_str = f"Expiring {_ts_relative(expiring)}"
+            else:
+                annex_str = "Expiring soon"
         else:
             n = int(annexes)
             annex_str = f"{n} annex{'es' if n != 1 else ''} remaining"
+
+        is_open = fo.get("open", True)
+        status  = "🟢 Open" if is_open else "🔴 Closed"
 
         lines.append(
             f"**{location}** {stars}\n"
@@ -282,17 +279,22 @@ def format_fieldoffices(fieldoffices: dict | None = None) -> discord.Embed:
 
 def format_sillymeter(sillymeter: dict | None = None) -> discord.Embed:
     """
-    Silly Meter embed.  Handles three TTR API phases:
+    Silly Meter embed.  Handles all three official API states:
 
-      active     Meter is filling.  `teams` list holds current teams (first
-                 entry is the leader).  `sillymeterPoints` / `maxSillyMeterPoints`
-                 give progress.  `winner` is null during this phase.
+      Active    Meter is accumulating Silly Particles.
+                hp     = current HP (0–5,000,000)
+                rewards = [team1, team2, team3] (names)
+                rewardDescriptions = [desc1, desc2, desc3]
+                nextUpdateTimestamp = next points calculation
 
-      cooldown   Meter maxed, resetting.  `winner` holds the last winning team.
-                 Points fields are absent.  `nextTeams` previews upcoming round.
+      Reward    Meter maxed, rewards active for all of Toontown.
+                winner      = winning team name (string)
+                rewardPoints = {team: points} for all teams
+                nextUpdateTimestamp = when rewards end
 
-      sneak-peak Meter between cycles.  `nextTeams` teases upcoming teams.
-                 Both `winner` and `teams` may be null.
+      Inactive  Meter cooling down between cycles.
+                nextUpdateTimestamp = when Active state resumes
+                rewards / rewardDescriptions = teams for NEXT round
     """
     embed = discord.Embed(color=0x9B59B6)
 
@@ -302,111 +304,100 @@ def format_sillymeter(sillymeter: dict | None = None) -> discord.Embed:
         embed.set_footer(text=_updated_footer())
         return embed
 
-    raw_phase = (sillymeter.get("phase") or "active").lower()
-    if "cooldown" in raw_phase or "cool" in raw_phase:
-        phase = "cooldown"
-    elif "sneak" in raw_phase:
-        phase = "sneak_peek"
-    else:
-        phase = "active"
+    state = (sillymeter.get("state") or "Inactive").strip()  # "Active", "Reward", "Inactive"
+    hp    = int(sillymeter.get("hp") or 0)
+    next_ts = sillymeter.get("nextUpdateTimestamp")
 
-    # Extract lists — all may be None in the API response
-    teams_list: list[dict]   = sillymeter.get("teams") or []
-    winner_dict: dict | None = (
-        sillymeter.get("winner")
-        if isinstance(sillymeter.get("winner"), dict)
-        else None
-    )
-    next_teams: list[dict]   = sillymeter.get("nextTeams") or []
-
-    # Points only present during active phase
-    raw_pts    = sillymeter.get("sillymeterPoints")
-    raw_max    = sillymeter.get("maxSillyMeterPoints")
-    points     = int(raw_pts) if raw_pts is not None else 0
-    max_points = int(raw_max) if raw_max else 0
+    # rewards and rewardDescriptions are always lists of 3 strings
+    rewards:      list[str] = sillymeter.get("rewards") or []
+    reward_descs: list[str] = sillymeter.get("rewardDescriptions") or []
 
     # ── ACTIVE ───────────────────────────────────────────────────────────────
-    if phase == "active":
-        leading   = teams_list[0] if teams_list else {}
-        lead_name = _team_name(leading) or "Unknown"
-        lead_desc = leading.get("description") or _team_desc_fallback(lead_name)
-
-        if max_points > 0:
-            pct      = max(0, min(100, round(points / max_points * 100)))
-            filled   = round(pct / 5)
-            bar      = "█" * filled + "░" * (20 - filled)
-            pts_left = max(0, max_points - points)
-            prog     = (
-                f"`{bar}` **{pct}%**\n"
-                f"**{points:,}** / **{max_points:,}** Silly Points\n"
-                f"**{pts_left:,}** points to go!"
-            )
-        else:
-            prog = "*Progress data unavailable.*"
+    if state == "Active":
+        pct    = max(0, min(100, round(hp / SILLY_MAX_HP * 100)))
+        filled = round(pct / 5)
+        bar    = "█" * filled + "░" * (20 - filled)
+        pts_left = max(0, SILLY_MAX_HP - hp)
 
         embed.title = "🎭  Silly Meter — Filling Up!"
-        parts = [f"**{lead_name}** is leading the charge!"]
-        if lead_desc:
-            parts.append(f"*{lead_desc}*")
-        parts.append("")
-        parts.append(prog)
-        embed.description = "\n".join(parts)
-
-        if len(teams_list) > 1:
-            embed.add_field(
-                name="🏁  Also Competing",
-                value=_format_team_list(teams_list[1:]),
-                inline=False,
-            )
-
-        if next_teams:
-            embed.add_field(
-                name="👀  Coming Up Next",
-                value=_format_team_list(next_teams[:3]),
-                inline=False,
-            )
-
-    # ── COOLDOWN ─────────────────────────────────────────────────────────────
-    elif phase == "cooldown":
-        winner_name = _team_name(winner_dict) or "Unknown"
-        winner_desc = (
-            (winner_dict.get("description") if winner_dict else None)
-            or _team_desc_fallback(winner_name)
+        embed.description = (
+            f"`{bar}` **{pct}%**\n"
+            f"**{hp:,}** / **{SILLY_MAX_HP:,}** Silly Points\n"
+            f"**{pts_left:,}** points to go!"
+            + (f"\nNext update: {_ts_relative(next_ts)}" if next_ts else "")
         )
 
+        if rewards:
+            team_lines: list[str] = []
+            for i, team_name in enumerate(rewards):
+                desc = (
+                    reward_descs[i]
+                    if i < len(reward_descs)
+                    else _fallback_desc(team_name)
+                )
+                team_lines.append(
+                    f"**{team_name}**" + (f"\n*{desc}*" if desc else "")
+                )
+            embed.add_field(
+                name="🏁  Competing Teams",
+                value="\n\n".join(team_lines),
+                inline=False,
+            )
+
+    # ── REWARD ───────────────────────────────────────────────────────────────
+    elif state == "Reward":
+        winner      = sillymeter.get("winner") or "Unknown"
+        reward_pts  = sillymeter.get("rewardPoints") or {}
+
+        embed.title = "🎉  Silly Meter — Rewards Active!"
+        embed.description = (
+            f"The Silly Meter reached **{SILLY_MAX_HP:,}** Silly Points "
+            "and the whole town went absolutely *bananas!* 🎊\n\n"
+            f"**Winner: {winner}**\n"
+            + (_fallback_desc(winner) and f"*{_fallback_desc(winner)}*\n" or "")
+            + (f"\nRewards end: {_ts_relative(next_ts)}" if next_ts else "")
+        )
+
+        if reward_pts:
+            pts_lines: list[str] = []
+            for team_name, pts in sorted(
+                reward_pts.items(), key=lambda kv: kv[1], reverse=True
+            ):
+                crown = "👑 " if team_name == winner else ""
+                pts_lines.append(f"{crown}**{team_name}** — {pts:,} points")
+            embed.add_field(
+                name="📊  Team Scores",
+                value="\n".join(pts_lines),
+                inline=False,
+            )
+
+    # ── INACTIVE ─────────────────────────────────────────────────────────────
+    else:
         embed.title = "❄️  Silly Meter — Cooling Down"
         embed.description = (
-            "The Silly Meter reached its peak and the whole town went absolutely "
+            "The Silly Meter hit its peak and the whole town went absolutely "
             "*bananas!* 🎉\n\n"
             "The meter needs a moment to cool off from all that toontastic activity. "
-            "Once it settles down a brand new set of Silly Teams will step up to "
-            "keep the laughs going.\n\n"
-            f"**Last winner:** {winner_name}"
-            + (f"\n*{winner_desc}*" if winner_desc else "")
+            "Once it settles down a brand new round of silliness begins!\n"
+            + (f"\nMeter returns: {_ts_relative(next_ts)}" if next_ts else "")
         )
 
-        if next_teams:
+        if rewards:
+            team_lines_: list[str] = []
+            for i, team_name in enumerate(rewards):
+                desc = (
+                    reward_descs[i]
+                    if i < len(reward_descs)
+                    else _fallback_desc(team_name)
+                )
+                team_lines_.append(
+                    f"**{team_name}**" + (f"\n*{desc}*" if desc else "")
+                )
             embed.add_field(
-                name="🔜  Next Up — Sneak Peek",
-                value=_format_team_list(next_teams[:3]),
+                name="🔜  Next Round — Sneak Peek",
+                value="\n\n".join(team_lines_),
                 inline=False,
             )
-
-    # ── SNEAK PEEK ────────────────────────────────────────────────────────────
-    else:
-        embed.title = "👀  Silly Meter — Sneak Peek!"
-        embed.description = (
-            "The meter is gearing up for its next cycle. "
-            "Here's a sneak peek at the teams lined up for the next round of silliness!"
-        )
-        if next_teams:
-            embed.add_field(
-                name="🎭  Upcoming Teams",
-                value=_format_team_list(next_teams[:3]),
-                inline=False,
-            )
-        else:
-            embed.description += "\n\n*No lineup announced yet — check back soon!*"
 
     embed.set_footer(text=_updated_footer())
     return embed
@@ -429,18 +420,9 @@ _TRAIT_RANK: dict[str, int] = {
     "Often Lonely":          8, "Always Lonely":     9,
 }
 
-_PLAYGROUND_EMOJI: dict[str, str] = {
-    "Toontown Central":    "🌐",
-    "Donald's Dock":       "⚓",
-    "Daisy Gardens":       "🌼",
-    "Minnie's Melodyland": "🎵",
-    "The Brrrgh":          "❄️",
-    "Donald's Dreamland":  "🌙",
-}
-
 
 def _score_traits(traits: list[str]) -> tuple[str, str]:
-    """Return (star emoji, tier label) for a list of trait strings."""
+    """Return (star emoji, tier label)."""
     if not traits:
         return STAR_BAD, "Skip"
     if traits[0] == "Rarely Tired":
@@ -460,11 +442,28 @@ def _score_traits(traits: list[str]) -> tuple[str, str]:
 
 
 def format_doodles(doodles: dict | None = None) -> list[discord.Embed]:
-    """Build the doodle listing embeds, one per playground."""
-    doodle_list = _safe_get(doodles, "doodles") or []
-    updated     = _updated_footer()
+    """
+    Doodle listing embeds, one per playground.
 
-    if not doodle_list:
+    The TTR doodles API returns:
+      {district_name: {playground_name: [{dna, traits, cost}]}}
+    The top-level IS the district dict — there is no wrapper 'doodles' key.
+    Price field is 'cost' (not 'price').
+    """
+    updated = _updated_footer()
+
+    # Flatten district → playground → doodle list into {playground: [doodle]}
+    by_pg: dict[str, list[dict]] = {}
+    if isinstance(doodles, dict):
+        for district_name, playgrounds in doodles.items():
+            if not isinstance(playgrounds, dict):
+                continue
+            for pg_name, doodle_list in playgrounds.items():
+                if not isinstance(doodle_list, list):
+                    continue
+                by_pg.setdefault(pg_name, []).extend(doodle_list)
+
+    if not by_pg:
         embed = discord.Embed(
             title="🐾  Doodles",
             description="*No doodles are currently for sale.*",
@@ -472,11 +471,6 @@ def format_doodles(doodles: dict | None = None) -> list[discord.Embed]:
         )
         embed.set_footer(text=updated)
         return [embed]
-
-    by_pg: dict[str, list[dict]] = {}
-    for doodle in doodle_list:
-        pg = doodle.get("playground", "Unknown")
-        by_pg.setdefault(pg, []).append(doodle)
 
     embeds: list[discord.Embed] = []
     for pg_name, pg_doodles in by_pg.items():
@@ -487,42 +481,36 @@ def format_doodles(doodles: dict | None = None) -> list[discord.Embed]:
         )
         lines: list[str] = []
         for d in pg_doodles:
-            name      = d.get("name", "Unknown Doodle")
-            traits    = d.get("traits") or []
-            price     = d.get("price")
-            clr       = d.get("color", "")
+            name    = d.get("name", "Unknown Doodle")
+            traits  = d.get("traits") or []
+            cost    = d.get("cost")        # "cost" is the correct field name
+            color   = d.get("color", "")
 
             star, label = _score_traits(traits)
             trait_str   = "  •  ".join(traits) if traits else "No traits listed"
-            price_str   = f"{JELLYBEAN} {price:,}" if isinstance(price, int) else ""
-            clr_part    = f"*{clr}*  " if clr else ""
+            cost_str    = f"{JELLYBEAN} {cost:,}" if isinstance(cost, int) else ""
+            color_part  = f"*{color}*  " if color else ""
 
             lines.append(
                 f"{star} **{name}** `[{label}]`\n"
-                f"  {clr_part}{trait_str}\n"
-                f"  {price_str}"
+                f"  {color_part}{trait_str}\n"
+                f"  {cost_str}"
             )
 
         embed.description = "\n\n".join(lines) if lines else "*None available.*"
         embed.set_footer(text=updated)
         embeds.append(embed)
 
-    return embeds or [
-        discord.Embed(
-            title="🐾  Doodles",
-            description="*No doodles are currently for sale.*",
-            color=0xFF6B6B,
-        )
-    ]
+    return embeds
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Top-level feed formatters — called by bot.py _update_feed
+# Top-level feed formatters — called by bot.py _update_feed(feed_key, api_data)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _format_information_feed(api_data: dict) -> list[discord.Embed]:
     """
-    Returns 3 embeds for #tt-information:
+    3 embeds for #tt-information:
       [0] Districts & Invasions
       [1] Sellbot Field Offices
       [2] Silly Meter
