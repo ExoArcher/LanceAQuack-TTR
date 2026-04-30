@@ -69,7 +69,7 @@ class Config:
     category_name: str
     channel_information: str
     channel_doodles: str
-    channel_suit_calculator: str          # ← new
+    channel_suit_calculator: str
 
     @classmethod
     def load(cls) -> "Config":
@@ -91,18 +91,20 @@ class Config:
                 "CHANNEL_INFORMATION", "tt-information"
             ),
             channel_doodles=os.getenv("CHANNEL_DOODLES", "tt-doodles"),
-            channel_suit_calculator=os.getenv(          # ← new
+            channel_suit_calculator=os.getenv(
                 "CHANNEL_SUIT_CALCULATOR", "suit-calculator"
             ),
         )
 
     def feeds(self) -> dict[str, str]:
-        """Mapping of live-feed key -> default channel name.
-        These channels are auto-updated by the refresh loop.
-        #suit-calculator is static (info embed only) so it is NOT included here."""
+        """Mapping of feed key -> default channel name.
+
+        Note: #suit-calculator is NOT included here — it is static and
+        updated only on startup and /laq-refresh, not on the 90-second loop.
+        """
         return {
             "information": self.channel_information,
-            "doodles":     self.channel_doodles,
+            "doodles": self.channel_doodles,
         }
 
     def is_guild_allowed(self, guild_id: int) -> bool:
