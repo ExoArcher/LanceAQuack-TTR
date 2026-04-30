@@ -102,9 +102,9 @@ masks secrets and Cybrancee backups don't capture them in plaintext.
 |---|---|---|
 | `DISCORD_TOKEN` | your bot token | **Required.** Never put this in a file you commit. |
 | `GUILD_ALLOWLIST` | `123456789,987654321` | Comma-separated server IDs from step 2. |
-| `BOT_OWNER_IDS` | your Discord user ID | Comma-separated. Controls who can run `/laq_*` commands. |
+| `BOT_OWNER_IDS` | your Discord user ID | Comma-separated. Controls who can run `/pd_*` commands. |
 | `REFRESH_INTERVAL` | `90` | Optional. Seconds between refreshes (60–90 is ideal). |
-| `USER_AGENT` | `LanceAQuack-DiscBot (contact: you@example.com)` | The TTR API asks for a contact-y UA. |
+| `USER_AGENT` | `PawsPendragon-DiscBot (contact: you@example.com)` | The TTR API asks for a contact-y UA. |
 
 You can optionally set all the star/emoji variables here too — see
 `.env.example` for the full list with descriptions.
@@ -156,7 +156,7 @@ spam them.
 3. Restart the bot from the panel.
 4. Send them the invite link from step 3. They run `/ttr_setup`. Done.
 
-Alternatively, use the `/laq_guild_add <server_id>` slash command to
+Alternatively, use the `/pd_guild_add <server_id>` slash command to
 add a server to the *runtime* allowlist without restarting — handy for
 adding servers on the fly.
 
@@ -184,7 +184,7 @@ everything fresh and forgets the dead message IDs.
 
 **Bot leaves a server it should be in.**
 The server ID is not in `GUILD_ALLOWLIST`. Add it in the Variables tab
-and restart, or use `/laq_guild_add` from a server the bot is already in.
+and restart, or use `/pd_guild_add` from a server the bot is already in.
 
 **`state.json` — do I need to upload it?**
 No. The bot creates `state.json` automatically on first run. Uploading

@@ -1,6 +1,6 @@
 # calculate.py
 """
-Cog suit disguise point calculator for LanceAQuack TTR.
+Cog suit disguise point calculator for Paws Pendragon TTR.
 
 Exports
 -------
@@ -521,7 +521,7 @@ def build_result_embed(
             value=f"{_plan_lines(opt['plan'])}\n*{opt['note']}*",
             inline=False,
         )
-    embed.set_footer(text="LanceAQuack TTR • Suit Calculator")
+    embed.set_footer(text="Paws Pendragon TTR • Suit Calculator")
     return embed
 
 
@@ -583,18 +583,16 @@ def build_suit_calculator_embeds() -> list[discord.Embed]:
             "Use `/calculate` to find out exactly how many more points your cog "
             "suit needs and get three activity plans that minimise time between "
             "your runs!\n\n"
-            "**Command Format**\n"
-            "```\n/calculate <suit> <level> <current_points>\n```\n"
-            "`suit` — Suit abbreviation or full name (see list above).\n"
-            "`level` — The number shown next to your suit in-game "
-            "(e.g. `12` for MH12, `1` for CC1). Append `.0` for a 2.0 suit "
-            "(e.g. `12.0`), or add `2.0` to the suit name instead.\n"
-            "`current_points` — Points already earned toward this level's "
-            "quota (enter `0` if you just ranked up).\n\n"
-            "**Examples**\n"
-            "`/calculate MH 12 3000`\n"
-            "`/calculate TBC 29 0`\n"
-            "`/calculate RB2.0 19 7000` ← 2.0 suit"
+            "**Step-by-step dropdown flow**\n"
+            "1. Type `/calculate` — a private menu appears.\n"
+            "2. **Faction** — pick Sellbot, Cashbot, Lawbot, or Bossbot.\n"
+            "3. **Suit** — pick from the 8 suits for that faction.\n"
+            "4. **Version** *(top-tier suits only)* — choose 1.0 or 2.0.\n"
+            "5. **Level** — pick the level shown next to your suit in-game.\n"
+            "6. **Points** — enter how many points you've already earned "
+            "toward this level's quota (enter `0` if you just ranked up).\n\n"
+            "Results appear as a private reply — feel free to use it any time, "
+            "right here."
         ),
         color=STATIC_COLOR,
     )
@@ -616,6 +614,210 @@ def build_suit_calculator_embeds() -> list[discord.Embed]:
     return [e1, e2, e3, e4]
 
 
+# ── DROPDOWN CALCULATE FLOW ───────────────────────────────────────────────────
+
+class _CalcView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=120)
+
+
+class _FactionSelect(discord.ui.Select):
+    def __init__(self) -> None:
+        options = [
+            discord.SelectOption(label="Sellbot", value="sellbot", emoji="\U0001f4bc"),
+            discord.SelectOption(label="Cashbot", value="cashbot", emoji="\U0001f4b0"),
+            discord.SelectOption(label="Lawbot",  value="lawbot",  emoji="⚖️"),
+            discord.SelectOption(label="Bossbot", value="bossbot", emoji="\U0001f454"),
+        ]
+        super().__init__(placeholder="① Faction…", options=options)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        faction = self.values[0]
+        view = _CalcView()
+        view.add_item(_SuitSelect(faction))
+        await interaction.response.edit_message(
+            content=f"**{faction.capitalize()}** › Choose a suit:", view=view
+        )
+
+
+class _SuitSelect(discord.ui.Select):
+    def __init__(self, faction: str) -> None:
+        self.faction = faction
+        suits = SUITS_BY_FACTION[faction.capitalize()]
+        options = [discord.SelectOption(label=name, value=abbr) for abbr, name in suits]
+        super().__init__(placeholder="② Suit…", options=options)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        abbr = self.values[0]
+        _, _, suit_name = SUITS[abbr]
+        if abbr in _V2_SUITS:
+            view = _CalcView()
+            view.add_item(_VersionSelect(abbr, suit_name, self.faction))
+            await interaction.response.edit_message(
+                content=f"**{suit_name}** › Normal or 2.0?", view=view
+            )
+        else:
+            view, content = _make_level_view(abbr, suit_name, self.faction, False, 0)
+            await interaction.response.edit_message(content=content, view=view)
+
+
+class _VersionSelect(discord.ui.Select):
+    def __init__(self, abbr: str, suit_name: str, faction: str) -> None:
+        self.abbr      = abbr
+        self.suit_name = suit_name
+        self.faction   = faction
+        options = [
+            discord.SelectOption(label="1.0  —  Normal",   value="1"),
+            discord.SelectOption(label="2.0  —  Upgraded", value="2"),
+        ]
+        super().__init__(placeholder="③ Version…", options=options)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        is_v2 = self.values[0] == "2"
+        view, content = _make_level_view(self.abbr, self.suit_name, self.faction, is_v2, 0)
+        await interaction.response.edit_message(content=content, view=view)
+
+
+def _make_level_view(
+    abbr: str, suit_name: str, faction: str, is_v2: bool, page: int
+) -> tuple["_CalcView", str]:
+    _, chart_key, _ = SUITS[abbr]
+    lo, hi = valid_level_range(abbr, faction, chart_key, is_v2)
+    all_levels = [
+        lv for lv in range(lo, hi + 1)
+        if get_quota(abbr, faction, chart_key, lv, is_v2) is not None
+    ]
+
+    per_page = 23
+    start    = page * per_page
+    chunk    = all_levels[start : start + per_page]
+    has_prev = page > 0
+    has_next = start + per_page < len(all_levels)
+
+    v2_tag  = " 2.0" if is_v2 else ""
+    step    = "④" if abbr in _V2_SUITS else "③"
+    content = f"**{suit_name}{v2_tag}** › Choose your current level:"
+
+    options = []
+    for lv in chunk:
+        quota = get_quota(abbr, faction, chart_key, lv, is_v2)
+        desc  = "Maxed" if quota == 0 else f"{quota:,} pts quota"
+        options.append(discord.SelectOption(label=f"Level {lv}", description=desc, value=str(lv)))
+
+    view = _CalcView()
+    view.add_item(_LevelSelect(abbr, suit_name, faction, is_v2, step, options))
+    if has_prev:
+        view.add_item(_NavButton(abbr, suit_name, faction, is_v2, page - 1, "◀  Previous", discord.ButtonStyle.secondary))
+    if has_next:
+        view.add_item(_NavButton(abbr, suit_name, faction, is_v2, page + 1, "Next  ▶", discord.ButtonStyle.secondary))
+    return view, content
+
+
+class _LevelSelect(discord.ui.Select):
+    def __init__(
+        self, abbr: str, suit_name: str, faction: str,
+        is_v2: bool, step: str, options: list[discord.SelectOption],
+    ) -> None:
+        self.abbr      = abbr
+        self.suit_name = suit_name
+        self.faction   = faction
+        self.is_v2     = is_v2
+        super().__init__(placeholder=f"{step} Level…", options=options)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        level_num = int(self.values[0])
+        _, chart_key, _ = SUITS[self.abbr]
+        quota = get_quota(self.abbr, self.faction, chart_key, level_num, self.is_v2)
+        if quota == 0:
+            v2_tag = " 2.0" if self.is_v2 else ""
+            await interaction.response.edit_message(
+                content=(
+                    f"\U0001f43e **{self.suit_name}{v2_tag}** at level {level_num} "
+                    "is **Maxed** — nothing left to earn!"
+                ),
+                view=None,
+            )
+            return
+        await interaction.response.send_modal(
+            _PointsModal(self.abbr, self.suit_name, self.faction, level_num, self.is_v2, quota)
+        )
+
+
+class _NavButton(discord.ui.Button):
+    def __init__(
+        self, abbr: str, suit_name: str, faction: str,
+        is_v2: bool, page: int, label: str, style: discord.ButtonStyle,
+    ) -> None:
+        super().__init__(label=label, style=style)
+        self.abbr      = abbr
+        self.suit_name = suit_name
+        self.faction   = faction
+        self.is_v2     = is_v2
+        self.page      = page
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view, content = _make_level_view(self.abbr, self.suit_name, self.faction, self.is_v2, self.page)
+        await interaction.response.edit_message(content=content, view=view)
+
+
+class _PointsModal(discord.ui.Modal):
+    points_input = discord.ui.TextInput(
+        label="Points already earned toward this level",
+        placeholder="e.g. 3000   (enter 0 if you just ranked up)",
+        min_length=1,
+        max_length=7,
+    )
+
+    def __init__(
+        self, abbr: str, suit_name: str, faction: str,
+        level_num: int, is_v2: bool, quota: int,
+    ) -> None:
+        v2_tag = " 2.0" if is_v2 else ""
+        super().__init__(title=f"{suit_name}{v2_tag} — Level {level_num}")
+        self.abbr      = abbr
+        self.suit_name = suit_name
+        self.faction   = faction
+        self.level_num = level_num
+        self.is_v2     = is_v2
+        self.quota     = quota
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = self.points_input.value.replace(",", "").strip()
+        try:
+            current_pts = int(raw)
+        except ValueError:
+            await interaction.response.edit_message(
+                content="❌ Enter a whole number for current points.", view=None
+            )
+            return
+        if current_pts < 0:
+            await interaction.response.edit_message(
+                content="❌ Current points can't be negative.", view=None
+            )
+            return
+
+        meta = FACTION_META[self.faction]
+        if current_pts >= self.quota:
+            await interaction.response.edit_message(
+                content=(
+                    f"✅ You already have enough to promote!\n"
+                    f"**{current_pts:,}** / **{self.quota:,}** {meta['currency']} — "
+                    "ready to rank up. \U0001f43e"
+                ),
+                embed=None,
+                view=None,
+            )
+            return
+
+        pts_remaining = self.quota - current_pts
+        options = build_options(pts_remaining, FACTION_ACTIVITIES[self.faction])
+        embed   = build_result_embed(
+            self.suit_name, self.faction, self.level_num,
+            current_pts, self.quota, self.is_v2, options,
+        )
+        await interaction.response.edit_message(content=None, embed=embed, view=None)
+
+
 # ── COMMAND REGISTRATION ──────────────────────────────────────────────────────
 
 def register_calculate(bot) -> None:
@@ -626,82 +828,9 @@ def register_calculate(bot) -> None:
     )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.describe(
-        suit="Suit name or abbreviation, e.g. MH, TBC, RobberBaron, BW2.0",
-        level="Level number (e.g. 12). Append .0 for a 2.0 suit (e.g. 12.0) — or add 2.0 to the suit name.",
-        current_points="Points already earned toward this level's quota (0 = just ranked up)",
-    )
-    async def calculate(
-        interaction: discord.Interaction,
-        suit: str,
-        level: str,
-        current_points: app_commands.Range[int, 0, 500_000],
-    ) -> None:
-        await interaction.response.defer(ephemeral=True, thinking=True)
-
-        level_num, level_v2 = parse_level(level)
-        if level_num < 1 or level_num > 50:
-            await interaction.followup.send(
-                f"❌ **Invalid level:** `{level}`\n"
-                "Enter the level number shown in-game (1–50). "
-                "Append `.0` if you have a 2.0 suit, e.g. `12.0`.",
-                ephemeral=True,
-            )
-            return
-
-        result = resolve_suit(suit)
-        if result is None:
-            await interaction.followup.send(
-                f"❌ **Unknown suit:** `{suit}`\n"
-                f"Check `#suit-calculator` for the full abbreviation list.",
-                ephemeral=True,
-            )
-            return
-
-        user_abbr, suit_name, faction, chart_key, suit_v2 = result
-        is_v2 = suit_v2 or level_v2
-        if is_v2 and user_abbr not in _V2_SUITS:
-            is_v2 = False
-
-        lo, hi = valid_level_range(user_abbr, faction, chart_key, is_v2)
-        if level_num < lo or level_num > hi:
-            v2_str = " 2.0" if is_v2 else ""
-            await interaction.followup.send(
-                f"❌ **{suit_name}{v2_str}** uses levels **{lo}–{hi}**. "
-                f"You entered `{level_num}`.",
-                ephemeral=True,
-            )
-            return
-
-        quota = get_quota(user_abbr, faction, chart_key, level_num, is_v2)
-        if quota is None:
-            await interaction.followup.send(
-                f"❌ No data found for **{suit_name}** level `{level_num}`.",
-                ephemeral=True,
-            )
-            return
-
-        if quota == 0:
-            await interaction.followup.send(
-                f"\U0001f43e **{suit_name}** at level {level_num} is **Maxed** — "
-                "nothing left to earn!",
-                ephemeral=True,
-            )
-            return
-
-        if current_points >= quota:
-            meta = FACTION_META[faction]
-            await interaction.followup.send(
-                f"✅ You already have enough to promote!\n"
-                f"**{current_points:,}** / **{quota:,}** {meta['currency']} — "
-                "ready to rank up. \U0001f43e",
-                ephemeral=True,
-            )
-            return
-
-        pts_remaining = quota - current_points
-        options = build_options(pts_remaining, FACTION_ACTIVITIES[faction])
-        embed   = build_result_embed(
-            suit_name, faction, level_num, current_points, quota, is_v2, options,
+    async def calculate(interaction: discord.Interaction) -> None:
+        view = _CalcView()
+        view.add_item(_FactionSelect())
+        await interaction.response.send_message(
+            "Choose your cog suit faction:", view=view, ephemeral=True
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)

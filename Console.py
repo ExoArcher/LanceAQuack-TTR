@@ -1,6 +1,6 @@
 # Console.py
 """
-Server hosting console command handler for LanceAQuack TTR.
+Server hosting console command handler for Paws Pendragon TTR.
 
 Reads commands from stdin (the Cybrancee hosting panel console).
 
@@ -36,7 +36,7 @@ HELP_TEXT = (
     "[console] Available commands:\n"
     "  stop           -- Notify all servers of maintenance, then shut down.\n"
     "  restart        -- Notify all servers of a restart, then restart the process.\n"
-    "  maintenance    -- Toggle maintenance mode banner on/off in all server channels.\n"
+    "  maintenance / maint -- Toggle maintenance mode banner on/off in all server channels.\n"
     "  announce <msg> -- Broadcast a message to every tracked server (auto-deletes in 30 min).\n"
     "  help           -- Show this list."
 )
@@ -86,7 +86,7 @@ async def run_console(bot) -> None:
             await _handle_restart(bot)
             break
 
-        elif cmd == "maintenance":
+        elif cmd in ("maintenance", "maint"):
             await _handle_maintenance(bot)
 
         elif cmd in ("help", "?"):
@@ -133,9 +133,9 @@ async def _handle_stop(bot) -> None:
 
     now_unix = int(time.time())
     embed = discord.Embed(
-        title="\U0001f527 LanceAQuack — Going Down for Maintenance",
+        title="\U0001f527 Paws Pendragon — Going Down for Maintenance",
         description=(
-            "LanceAQuack is going down for maintenance.\n"
+            "Paws Pendragon is going down for maintenance.\n"
             f"**Went offline:** <t:{now_unix}:R>\n\n"
             "Check [toonhq.org](https://toonhq.org) in the meantime "
             "for your toony needs! We'll be back soon. \U0001f43e"
@@ -143,7 +143,7 @@ async def _handle_stop(bot) -> None:
         color=0xE67E22,
         timestamp=datetime.now(timezone.utc),
     )
-    embed.set_footer(text="LanceAQuack TTR • Maintenance Notice")
+    embed.set_footer(text="Paws Pendragon TTR • Maintenance Notice")
 
     await _broadcast_to_all_info_channels(bot, embed)
     bot._console_stop_sent = True
@@ -158,16 +158,16 @@ async def _handle_restart(bot) -> None:
 
     now_unix = int(time.time())
     embed = discord.Embed(
-        title="\U0001f504 LanceAQuack — Restarting",
+        title="\U0001f504 Paws Pendragon — Restarting",
         description=(
-            "LanceAQuack is restarting and will be back shortly!\n"
+            "Paws Pendragon is restarting and will be back shortly!\n"
             f"**Went down:** <t:{now_unix}:R>\n\n"
             "Hang tight — the bot will reconnect in just a moment. \U0001f43e"
         ),
         color=0x3498DB,
         timestamp=datetime.now(timezone.utc),
     )
-    embed.set_footer(text="LanceAQuack TTR • Restart Notice")
+    embed.set_footer(text="Paws Pendragon TTR • Restart Notice")
 
     await _broadcast_to_all_info_channels(bot, embed)
     await asyncio.sleep(2)
@@ -228,7 +228,7 @@ async def _handle_maintenance(bot) -> None:
         embed = discord.Embed(
             title="\U0001f527 Maintenance Mode",
             description=(
-                "LanceAQuack TTR is currently being worked on and "
+                "Paws Pendragon TTR is currently being worked on and "
                 "**may go down temporarily**.\n\n"
                 "Live data updates will continue as normal in the meantime.\n"
                 "We appreciate your patience! \U0001f43e"
@@ -236,7 +236,7 @@ async def _handle_maintenance(bot) -> None:
             color=0xE67E22,
             timestamp=datetime.now(timezone.utc),
         )
-        embed.set_footer(text="LanceAQuack TTR • Maintenance Mode Active")
+        embed.set_footer(text="Paws Pendragon TTR • Maintenance Mode Active")
 
         guilds_block = bot.state.get("guilds", {})
         new_stored   = {}
@@ -275,6 +275,35 @@ async def _handle_maintenance(bot) -> None:
             f"[console] Maintenance mode ON -- {sent} banner(s) posted, {failed} failed.",
             flush=True,
         )
+
+
+# ── Startup cleanup ───────────────────────────────────────────────────────────
+
+async def clear_maintenance_on_startup(bot) -> None:
+    """Delete any maintenance banners left over from the previous session."""
+    stored = _load_maint_mode()
+    if not stored:
+        return
+    log.info("[console] Clearing leftover maintenance banners from previous session.")
+    removed = 0
+    for guild_id_str, channels in stored.items():
+        for feed_key, msg_id in channels.items():
+            channel_id = _channel_id_for_feed(bot, guild_id_str, feed_key)
+            if not channel_id:
+                continue
+            channel = bot.get_channel(channel_id)
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.delete()
+                removed += 1
+            except discord.NotFound:
+                removed += 1
+            except Exception as exc:
+                log.warning("[console] Could not remove startup maintenance banner %s: %s", msg_id, exc)
+    _save_maint_mode({})
+    log.info("[console] Startup: cleared %d maintenance banner(s).", removed)
 
 
 # ── Announce ──────────────────────────────────────────────────────────────────

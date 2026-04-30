@@ -100,7 +100,7 @@ class Config:
         """Mapping of feed key -> default channel name.
 
         Note: #suit-calculator is NOT included here — it is static and
-        updated only on startup and /laq-refresh, not on the 90-second loop.
+        updated only on startup and /pd-refresh, not on the 90-second loop.
         """
         return {
             "information": self.channel_information,

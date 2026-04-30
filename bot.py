@@ -8,14 +8,14 @@ How it works
    + runtime allowlist persisted in ``state.json``) are accepted; the
    bot leaves any other guild that tries to add it, DMing the owner
    with instructions to request access from ExoArcher.
-2. In each allowed guild, an admin runs **``/laq-setup``** once. That
+2. In each allowed guild, an admin runs **``/pd-setup``** once. That
    command finds-or-creates the ``Toontown Rewritten`` category plus a
    ``#tt-information``, ``#tt-doodles``, and ``#suit-calculator`` channel,
    posts placeholder messages in each, and stores the message IDs in
    ``state.json``.
 3. A background task runs every ``$REFRESH_INTERVAL`` seconds, fetches
    the TTR APIs ONCE, and edits each tracked guild's messages in place.
-   Doodle embeds are only updated every 12 hours (or on /laq-refresh).
+   Doodle embeds are only updated every 12 hours (or on /pd-refresh).
 4. A separate sweep task runs every 15 minutes removing stale bot messages.
 
 Slash commands (all users)
@@ -25,13 +25,13 @@ Slash commands (all users)
 ``/helpme``       -- DM the list of available bot commands.
 ``/invite-app``   -- DM the link to add the bot to a personal Discord account.
 ``/invite-server``-- DM the link to add the bot to a Discord server.
-``/laq-refresh``  -- Force an immediate refresh and sweep old messages.
+``/pd-refresh``  -- Force an immediate refresh and sweep old messages.
 ``/calculate``    -- Calculate remaining suit points and get optimised activity plans.
 
 Slash commands (Manage Channels + Manage Messages)
 ---------------------------------------------------
-``/laq-setup``    -- Create channels and start tracking this guild.
-``/laq-teardown`` -- Stop tracking this guild (channels are NOT deleted).
+``/pd-setup``    -- Create channels and start tracking this guild.
+``/pd-teardown`` -- Stop tracking this guild (channels are NOT deleted).
 
 Console commands
 ----------------
@@ -57,7 +57,7 @@ import subprocess as _subprocess
 import sys as _sys
 
 _BOT_DIR = _os.path.dirname(_os.path.abspath(__file__))
-_GIT_REPO = "https://github.com/ExoArcher/LanceAQuack-TTR"
+_GIT_REPO = "https://github.com/ExoArcher/PawsPendragon-TTR"
 
 try:
     if not _os.path.isdir(_os.path.join(_BOT_DIR, ".git")):
@@ -103,7 +103,7 @@ from discord.ext import tasks
 from config import Config
 from formatters import FORMATTERS, format_doodles, format_information, format_sillymeter
 from ttr_api import TTRApiClient
-from Console import run_console
+from Console import run_console, clear_maintenance_on_startup
 from calculate import register_calculate, build_suit_calculator_embeds
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ TEARDOWN_LOG   = Path(__file__).with_name("teardown_log.txt")
 WELCOMED_FILE  = Path(__file__).with_name("welcomed_users.json")
 BANNED_FILE    = Path(__file__).with_name("banned_users.json")
 
-ANNOUNCEMENT_TITLE       = "📢 LAQ Bot Announcement"
+ANNOUNCEMENT_TITLE       = "<:Lav:1499503216084390019> Paws Pendragon Dev Notice <:Lav:1499503216084390019>"
 ANNOUNCEMENT_TTL_SECONDS = 30 * 60
 DOODLE_REFRESH_INTERVAL  = 12 * 60 * 60  # 12 hours in seconds
 
@@ -156,6 +156,8 @@ class TTRBot(discord.Client):
         # Timestamp of the last time doodle embeds were pushed to Discord.
         # 0.0 = never, which triggers an immediate doodle refresh on first run.
         self._last_doodle_refresh: float = 0.0
+        # Per-user cooldown for /pd-refresh: user_id → last-use timestamp.
+        self._refresh_cooldowns: dict[int, float] = {}
 
     # ── STATE MANAGEMENT ──────────────────────────────────────────────────────
 
@@ -246,7 +248,7 @@ class TTRBot(discord.Client):
         await self._api.__aenter__()
 
         # Push an empty global command list to Discord, wiping any stale
-        # global commands (ttr_refresh, laq_guild_add, etc.).
+        # global commands (ttr_refresh, pd_guild_add, etc.).
         self.tree.clear_commands(guild=None)
         await self.tree.sync()
 
@@ -297,6 +299,7 @@ class TTRBot(discord.Client):
             await self._sync_commands_to_guild(guild)
 
         await self._cleanup_maintenance_msgs()
+        await clear_maintenance_on_startup(self)
         asyncio.create_task(run_console(self), name="console-listener")
         await self._cleanup_announcements_on_startup()
         await self._refresh_suit_calculator_all_guilds()
@@ -443,7 +446,7 @@ class TTRBot(discord.Client):
                 new_msg = await channel.send(embed=embed)
                 if i == 0:
                     try:
-                        await new_msg.pin(reason="Suit Calculator -- LanceAQuack TTR")
+                        await new_msg.pin(reason="Suit Calculator -- Paws Pendragon TTR")
                     except (discord.Forbidden, discord.HTTPException) as exc:
                         log.debug("[suit-calc] Could not pin: %s", exc)
                 verified_ids.append(new_msg.id)
@@ -507,7 +510,7 @@ class TTRBot(discord.Client):
         """Refresh all live feed embeds across tracked guilds.
 
         Doodle embeds are throttled to once every 12 hours unless
-        *force_doodles* is True (set by /laq-refresh).
+        *force_doodles* is True (set by /pd-refresh).
         """
         if self._api is None:
             return
@@ -529,7 +532,7 @@ class TTRBot(discord.Client):
                     continue
                 for feed_key in self.config.feeds():
                     # Skip doodle embeds unless the 12-hour interval has elapsed
-                    # (or this is a forced refresh from /laq-refresh).
+                    # (or this is a forced refresh from /pd-refresh).
                     if feed_key == "doodles" and not refresh_doodles:
                         continue
                     try:
@@ -725,7 +728,7 @@ class TTRBot(discord.Client):
                 guild_id = int(guild_id_str)
             except ValueError:
                 continue
-            for feed_key in self.config.feeds():
+            for feed_key in ("information", "doodles", "suit_calculator"):
                 entry = gs.get(feed_key)
                 if not entry:
                     continue
@@ -906,7 +909,7 @@ class TTRBot(discord.Client):
         if user.id in welcomed:
             return
         msg = (
-            "**Thanks for installing LanceAQuack TTR!** :duck:\n\n"
+            "**Thanks for installing Paws Pendragon TTR!** :duck:\n\n"
             ":warning: *This bot is currently in Early Access -- features are still "
             "being added and things may change.*\n\n"
             "**Available Commands:**\n"
@@ -950,7 +953,7 @@ class TTRBot(discord.Client):
         reason    = record.get("reason") or "No reason given."
         banned_at = record.get("banned_at", "unknown date")
         msg = (
-            ":no_entry: **You have been banned from using LanceAQuack TTR.**\n\n"
+            ":no_entry: **You have been banned from using Paws Pendragon TTR.**\n\n"
             f"**Reason:** {reason}\n"
             f"**Date:** {banned_at}\n\n"
             "If you believe this is a mistake, contact the bot owner."
@@ -1027,8 +1030,7 @@ class TTRBot(discord.Client):
             doodle_data = await self._api.fetch("doodles")
             embeds = format_doodles(doodle_data)
             try:
-                for embed in embeds:
-                    await interaction.user.send(embed=embed)
+                await interaction.user.send(embeds=embeds)
                 await interaction.followup.send("Check your DMs! 📬", ephemeral=True)
             except discord.Forbidden:
                 await interaction.followup.send(
@@ -1047,16 +1049,19 @@ class TTRBot(discord.Client):
             if await self._reject_if_banned(interaction):
                 return
             msg = (
-                "**LanceAQuack TTR -- Available Commands** :duck:\n\n"
+                "**Paws Pendragon TTR -- Available Commands** :duck:\n\n"
                 ":warning: *This bot is currently in Early Access -- features are still "
                 "being added and things may change.*\n\n"
                 "`/ttrinfo` -- Get the current Toontown district populations, cog invasions, "
                 "field offices, and Silly Meter status sent directly to your DMs.\n\n"
                 "`/doodleinfo` -- Get the full Toontown doodle list with trait ratings and a "
                 "buying guide sent directly to your DMs.\n\n"
-                "`/invite-app` -- Get the link to add LanceAQuack TTR to your Discord account.\n\n"
-                "`/invite-server` -- Get the link to add LanceAQuack TTR to a server.\n\n"
-                "`/helpme` -- Show this message again."
+                "`/beanfest` -- Get the weekly Beanfest schedule sent directly to your DMs.\n\n"
+                "`/calculate` -- Cog suit merit/stock options/jury notices calculator.\n\n"
+                "`/invite-app` -- Get the link to add Paws Pendragon TTR to your Discord account.\n\n"
+                "`/invite-server` -- Get the link to add Paws Pendragon TTR to a server.\n\n"
+                "`/helpme` -- Show this message again.\n\n"
+                "`/helpme` -- App-version command list (embed format)."
             )
             try:
                 await interaction.user.send(msg)
@@ -1064,10 +1069,69 @@ class TTRBot(discord.Client):
             except discord.Forbidden:
                 await interaction.response.send_message(msg, ephemeral=True)
 
+        # ── /helpme  (all users, guild + user install) ────────────────────
+        @self.tree.command(
+            name="helpme",
+            description="[User Command] Show available commands for the Paws Pendragon app.",
+        )
+        @app_commands.allowed_installs(guilds=True, users=True)
+        @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+        async def help_me(interaction: discord.Interaction) -> None:
+            if await self._reject_if_banned(interaction):
+                return
+            embed = discord.Embed(
+                title="Paws Pendragon TTR — Commands",
+                description=(
+                    ":warning: *This bot is currently in Early Access — features are still "
+                    "being added and things may change.*"
+                ),
+                color=0x3498DB,
+            )
+            embed.add_field(
+                name="/ttrinfo",
+                value="Current district populations, cog invasions, field offices, and Silly Meter status — sent to your DMs.",
+                inline=False,
+            )
+            embed.add_field(
+                name="/doodleinfo",
+                value="Current doodle list with trait ratings and a buying guide — sent to your DMs.",
+                inline=False,
+            )
+            embed.add_field(
+                name="/calculate",
+                value="Cog suit merit/stock options/jury notices calculator — interactive dropdown flow.",
+                inline=False,
+            )
+            embed.add_field(
+                name="/beanfest",
+                value="Weekly Beanfest event schedule — sent to your DMs.",
+                inline=False,
+            )
+            embed.add_field(
+                name="/invite-app",
+                value="Add Paws Pendragon TTR to your personal Discord account.",
+                inline=False,
+            )
+            embed.add_field(
+                name="/invite-server",
+                value="Add Paws Pendragon TTR to a Discord server.",
+                inline=False,
+            )
+            embed.add_field(
+                name="/helpme",
+                value="Show this message.",
+                inline=False,
+            )
+            try:
+                await interaction.user.send(embed=embed)
+                await interaction.response.send_message("Check your DMs! 📬", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+
         # ── /invite-app  (all users, guild + user install) ─────────────────
         @self.tree.command(
             name="invite-app",
-            description="[User Command] Add LanceAQuack TTR to your personal Discord account.",
+            description="[User Command] Add Paws Pendragon TTR to your personal Discord account.",
         )
         @app_commands.allowed_installs(guilds=True, users=True)
         @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -1081,11 +1145,11 @@ class TTRBot(discord.Client):
                 "&scope=applications.commands"
             )
             msg = (
-                f":link: **Add LanceAQuack TTR to your Discord account**\n"
+                f":link: **Add Paws Pendragon TTR to your Discord account**\n"
                 f"{link}\n"
                 f"​\n"
                 f"**About the bot**\n"
-                f"LanceAQuack TTR is a Toontown Rewritten companion bot. "
+                f"Paws Pendragon TTR is a Toontown Rewritten companion bot. "
                 f"It delivers live game data -- district populations, cog invasions, "
                 f"active field offices, Silly Meter status, and the full doodle guide -- "
                 f"directly to your DMs from anywhere in Discord.\n"
@@ -1106,7 +1170,7 @@ class TTRBot(discord.Client):
         # ── /invite-server  (all users, guild + user install) ──────────────
         @self.tree.command(
             name="invite-server",
-            description="[User Command] Add LanceAQuack TTR to a Discord server.",
+            description="[User Command] Add Paws Pendragon TTR to a Discord server.",
         )
         @app_commands.allowed_installs(guilds=True, users=True)
         @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -1120,11 +1184,11 @@ class TTRBot(discord.Client):
                 "&scope=bot+applications.commands"
             )
             msg = (
-                f":link: **Add LanceAQuack TTR to a server**\n"
+                f":link: **Add Paws Pendragon TTR to a server**\n"
                 f"{link}\n"
                 f"​\n"
                 f"**About the bot**\n"
-                f"LanceAQuack TTR is a Toontown Rewritten companion bot. "
+                f"Paws Pendragon TTR is a Toontown Rewritten companion bot. "
                 f"When added to a server it automatically creates a **#tt-information** "
                 f"channel and a **#tt-doodles** channel. These are kept up to date "
                 f"with live TTR data: district populations, cog invasions, field offices, "
@@ -1145,14 +1209,59 @@ class TTRBot(discord.Client):
             except discord.Forbidden:
                 await interaction.response.send_message(msg, ephemeral=True)
 
-        # ── /laq-setup  (Manage Channels + Manage Messages) ────────────────
+        # ── /beanfest  (all users, guild + user install) ─────────────────
         @self.tree.command(
-            name="laq-setup",
+            name="beanfest",
+            description="[User Command] View the weekly Beanfest schedule. Events are community-run and subject to change.",
+        )
+        @app_commands.allowed_installs(guilds=True, users=True)
+        @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+        async def beanfest(interaction: discord.Interaction) -> None:
+            if await self._reject_if_banned(interaction):
+                return
+            embed = discord.Embed(
+                title="Beanfest Schedule",
+                description=(
+                    "These are **community-run** events and schedules are subject to change. "
+                    "Always check with the hosting guild for the latest info."
+                ),
+                color=0xF39C12,
+            )
+            embed.add_field(
+                name="Wednesday",
+                value="Adult ToonTown Addicts\nKaboom Cliffs · 8pm TTT / 11pm ET",
+                inline=False,
+            )
+            embed.add_field(
+                name="Friday",
+                value="Adult ToonTown Addicts\nKaboom Cliffs · 4pm TTT / 7pm ET",
+                inline=False,
+            )
+            embed.add_field(
+                name="Saturday",
+                value="Cold Callers Guild\nHiccup Hills · 12pm TTT / 3pm ET",
+                inline=False,
+            )
+            embed.add_field(
+                name="Sunday",
+                value="Adult ToonTown Addicts\nKaboom Cliffs · 10am TTT / 1pm ET",
+                inline=False,
+            )
+            embed.set_footer(text="Location: Goofy's Speedway")
+            try:
+                await interaction.user.send(embed=embed)
+                await interaction.response.send_message("Check your DMs! 📬", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # ── /pd-setup  (Manage Channels + Manage Messages) ────────────────
+        @self.tree.command(
+            name="pd-setup",
             description="[Server Admin Command] Create the TTR feed channels in this server and start tracking them.",
         )
         @app_commands.default_permissions(manage_channels=True, manage_messages=True)
         @app_commands.guild_only()
-        async def laq_setup(interaction: discord.Interaction) -> None:
+        async def pd_setup(interaction: discord.Interaction) -> None:
             guild = interaction.guild
             if guild is None:
                 await interaction.response.send_message("Must be used inside a server.", ephemeral=True)
@@ -1175,7 +1284,7 @@ class TTRBot(discord.Client):
                         log.exception("Initial refresh failed for %s/%s", guild.id, feed_key)
                 swept = await self._sweep_guild_stale(guild.id)
                 if swept:
-                    log.info("laq-setup swept %d stale message(s) in %s", swept, guild.id)
+                    log.info("pd-setup swept %d stale message(s) in %s", swept, guild.id)
                 await self._save_state()
             except discord.Forbidden:
                 await interaction.followup.send(
@@ -1192,40 +1301,70 @@ class TTRBot(discord.Client):
                 ephemeral=True,
             )
 
-        # ── /laq-refresh  (all users, guild only) ──────────────────────────
+        # ── /pd-refresh  (all users, guild only) ──────────────────────────
+        _REFRESH_COOLDOWN = 600  # 10 minutes in seconds
+
         @self.tree.command(
-            name="laq-refresh",
-            description="[User Command] Force an immediate refresh of all TTR feeds and remove old messages.",
+            name="pd-refresh",
+            description="[User Command] Force an immediate refresh of TTR feeds in this server.",
         )
         @app_commands.guild_only()
-        async def laq_refresh(interaction: discord.Interaction) -> None:
+        async def pd_refresh(interaction: discord.Interaction) -> None:
+            guild = interaction.guild
+            if guild is None:
+                await interaction.response.send_message("Must be used inside a server.", ephemeral=True)
+                return
+
+            # Check manage_messages permission to bypass cooldown.
+            member = interaction.user
+            can_bypass = (
+                isinstance(member, discord.Member)
+                and member.guild_permissions.manage_messages
+            )
+
+            if not can_bypass:
+                last_used = self._refresh_cooldowns.get(member.id, 0.0)
+                remaining = _REFRESH_COOLDOWN - (time.time() - last_used)
+                if remaining > 0:
+                    mins, secs = divmod(int(remaining), 60)
+                    wait = f"{mins}m {secs}s" if mins else f"{secs}s"
+                    await interaction.response.send_message(
+                        f"You can use `/pd-refresh` again in **{wait}**.",
+                        ephemeral=True,
+                    )
+                    return
+
             await interaction.response.defer(ephemeral=True, thinking=True)
-            # force_doodles=True bypasses the 12-hour throttle so doodles
-            # are always included when a user manually triggers a refresh.
-            await self._refresh_once(force_doodles=True)
-            swept = 0
-            if interaction.guild is not None:
+
+            if not can_bypass:
+                self._refresh_cooldowns[member.id] = time.time()
+
+            async with self._refresh_lock:
+                api_data = await self._fetch_all()
                 try:
-                    swept = await self._sweep_guild_stale(interaction.guild.id)
+                    await self._update_feed(guild.id, "information", api_data)
                 except Exception:
-                    log.exception("Sweep failed for %s", interaction.guild.id)
-                if swept:
-                    await self._save_state()
+                    log.exception("Feed refresh failed for guild %s", guild.id)
+
+            swept = 0
             try:
-                await self._refresh_suit_calculator_all_guilds()
+                swept = await self._sweep_guild_stale(guild.id)
             except Exception:
-                log.exception("Suit-calc refresh failed during laq-refresh")
+                log.exception("Sweep failed for %s", guild.id)
+            if swept:
+                await self._save_state()
+
             tail = f" Cleaned up {swept} old message(s)." if swept else ""
             await interaction.followup.send(f"Refreshed.{tail}", ephemeral=True)
 
-        # ── /laq-teardown  (Manage Channels + Manage Messages) ─────────────
+        # ── /pd-teardown  (Manage Channels + Manage Messages) ─────────────
         @self.tree.command(
-            name="laq-teardown",
+            name="pd-teardown",
             description="[Server Admin Command] Stop TTR feed tracking. Channels are kept; delete them manually if needed.",
         )
         @app_commands.default_permissions(manage_channels=True, manage_messages=True)
         @app_commands.guild_only()
-        async def laq_teardown(interaction: discord.Interaction) -> None:
+        async def pd_teardown(interaction: discord.Interaction) -> None:
             guild = interaction.guild
             if guild is None:
                 await interaction.response.send_message("Must be used inside a server.", ephemeral=True)
@@ -1241,7 +1380,7 @@ class TTRBot(discord.Client):
             await interaction.response.send_message(msg, ephemeral=True)
 
         async def self_log_teardown(guild: discord.Guild, invoker: discord.abc.User) -> None:
-            """Append one line to teardown_log.txt for every /laq-teardown."""
+            """Append one line to teardown_log.txt for every /pd-teardown."""
             try:
                 owner_id   = guild.owner_id
                 owner_name = "unknown"

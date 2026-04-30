@@ -183,9 +183,9 @@ def doodle_priority(traits: list[str]) -> int:
     n_ok       = tiers.count("ok")
     n_rt       = n_perfect + n_amazing   # total Rarely Tired count
 
-    # Any OK trait drops below the minimum threshold.
+    # Any OK trait → lowest displayed tier (embed 3).
     if n_ok:
-        return PRIORITY_REST
+        return PRIORITY_GREAT_GOOD_OK
 
     # Perfect: EXACTLY Rarely Tired in slot 0 + 3 Great.
     if tiers == ("perfect", "great", "great", "great"):
