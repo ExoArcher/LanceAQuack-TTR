@@ -531,21 +531,13 @@ def _doodle_line(
 
 
 def _doodle_guide_embed() -> discord.Embed:
-    """Embed #1: explanation of the star-rating system.
-
-    Spells out the star → tier mapping at the top, then the tiering
-    rubric (what trait combination makes a doodle Perfect / Amazing /
-    Great / etc.). Each block is separated by a blank line so the
-    embed has room to breathe and matches the spacing used in the
-    data embeds below.
-    """
+    """Embed #1: explanation of the star-rating system."""
     embed = discord.Embed(
         title=":dog: Doodle Trait Guide",
         color=TTR_COLOR,
     )
 
-    # Star -> trait-quality legend (each tier: bold-italic description,
-    # blank line, then italic trait list).
+    # Star -> trait-quality legend
     legend = "\n\n".join(
         [
             (
@@ -554,25 +546,24 @@ def _doodle_guide_embed() -> discord.Embed:
                 "benefit and is noted on Perfect Doodles. When Rarely Tired "
                 "is in any other slot it still offers amazing benefit, keeping "
                 "your doodle from tiring in battle and giving more trick uses "
-                "before it gets tired.***\n\u200b\n"
-                "*Rarely Tired*"
+                "before it gets tired.***"
             ),
             (
                 f"{STAR_GREAT} {_b('[Great]')} -- "
                 "***Talents that offer strong positive benefits to your doodle, "
-                "but not as strong as Rarely Tired.***\n\u200b\n"
+                "but not as strong as Rarely Tired.***\n​\n"
                 "*Always Affectionate, Always Playful, Rarely Bored, "
                 "Rarely Confused, Rarely Forgets, Rarely Grumpy, "
                 "Rarely Hungry, Rarely Lonely, Rarely Restless, Rarely Sad*"
             ),
             (
                 f"{STAR_GOOD} {_b('[Good]')} -- "
-                "***Decent talents that just aren't as strong as Great.***\n\u200b\n"
+                "***Decent talents that just aren't as strong as Great.***\n​\n"
                 "*Often Affectionate, Often Playful, Pretty Calm, Pretty Excitable*"
             ),
             (
                 f"{STAR_OK} {_b('[OK]')} -- "
-                "***Not good talents, but could be worse.***\n\u200b\n"
+                "***Not good talents, but could be worse.***\n​\n"
                 "*Rarely Affectionate, Rarely Playful, Sometimes Affectionate, "
                 "Sometimes Bored, Sometimes Confused, Sometimes Forgets, "
                 "Sometimes Grumpy, Sometimes Hungry, Sometimes Lonely, "
@@ -581,7 +572,7 @@ def _doodle_guide_embed() -> discord.Embed:
             ),
             (
                 f"{STAR_BAD} {_b('[Bad]')} -- "
-                "***These are just bad traits for a doodle to have.***\n\u200b\n"
+                "***These are just bad traits for a doodle to have.***\n​\n"
                 "*Always Bored, Always Confused, Always Forgets, Always Grumpy, "
                 "Always Hungry, Always Lonely, Always Restless, Always Sad, "
                 "Always Tired, Often Bored, Often Confused, Often Forgets, "
@@ -591,7 +582,7 @@ def _doodle_guide_embed() -> discord.Embed:
         ]
     )
 
-    # Tiering list rubric — exactly what the thresholds require.
+    # Tiering list rubric
     tiering = "\n\n".join(
         [
             _b("Tiering List"),
@@ -702,8 +693,8 @@ def format_doodles(data: dict[str, Any] | None) -> list[discord.Embed]:
     ))
 
     # Flow-fill three embed descriptions. Discord's description cap is
-    # 4096; we leave some headroom for safety.
-    MAX_DESC = 3900
+    # 4096; MAX_DESC leaves a small safety margin.
+    MAX_DESC = 4050
     embed_lines: list[list[str]] = [[], [], []]
     embed_used = [0, 0, 0]
     cur = 0
@@ -776,8 +767,6 @@ def _district_status_icon(status: str) -> str:
     if s in {"offline"}:
         return ":red_circle:"
     if s in {"maintenance", "closed", "draining"}:
-        # "closed" / "draining" are TTR statuses that effectively mean
-        # the district is going down for re-tooning; show the wrench.
         return ":wrench:"
     return ":green_circle:"
 
@@ -805,9 +794,6 @@ def format_information(
     active_invasions = (invasions or {}).get("invasions", {}) or {}
     total_pop = (population or {}).get("totalPopulation")
 
-    # Title carries the total toons online (e.g. "ToonTown Information
-    # [ 1,234 Toons Online ]"). If the population API is down, we just
-    # show the bare title.
     if isinstance(total_pop, int):
         title = f"ToonTown Information [ {total_pop:,} Toons Online ]"
     else:
@@ -819,9 +805,6 @@ def format_information(
     # --- Districts (population + invasions combined) --------------
 
     if pop_by:
-        # Each district now renders as a 2-line block with a blank line
-        # between blocks, so build the body as a list of multi-line
-        # strings and join them with "\n\n" at the end.
         district_blocks: list[str] = []
         for district in sorted(pop_by.keys(), key=str.lower):
             pop = pop_by[district]
@@ -829,7 +812,6 @@ def format_information(
             inv = active_invasions.get(district)
             unavailable = _district_unavailable(status)
 
-            # --- unavailable districts get a compact "down" layout ---
             if unavailable:
                 icon = _district_status_icon(status)
                 line1 = " ".join([
@@ -841,8 +823,6 @@ def format_information(
                 district_blocks.append(f"{line1}\n{line2}")
                 continue
 
-            # --- active districts: invasion > plain status ---
-            # Line 1: [icon] [District] [N Online]
             icon = COG_EMOJI if inv else ":green_circle:"
             line1 = " ".join([
                 _b(f"[{icon}]"),
@@ -850,8 +830,6 @@ def format_information(
                 _b(f"[{pop} Online]"),
             ])
 
-            # Line 2: [Invasion] [:Safe:] [SpeedChat Only]
-            #         (only the boxes that apply; skip line 2 if all empty)
             line2_parts: list[str] = []
             if inv:
                 cog_type = _fmt_cog_type(inv.get("type") or "")
@@ -869,10 +847,6 @@ def format_information(
 
         body = "\n\n".join(district_blocks)
 
-        # Legend — always show every icon so players have a reference
-        # even when no district is currently in that state. Order
-        # (top → bottom): Safe → SpeedChat Only → green → red → wrench,
-        # with a blank line between each entry for breathing room.
         legend_entries = [
             f"{SAFE_EMOJI} *Immune to Mega Invasions (event-wide "
             "invasions like 2.0s and Skelecogs that sweep across "
@@ -892,16 +866,11 @@ def format_information(
         parts.append("**Districts**\n*Population data unavailable.*")
 
     # --- Field Offices -------------------------------------------
-    #
-    # Each office renders as a 2-line block with a blank line between
-    # blocks. Kaboomberg is a hidden 4-star field office only available
-    # via a special quest; we always pin it to the top of the list.
+
     offices = (fieldoffices or {}).get("fieldOffices", {}) or {}
 
     fo_blocks: list[str] = []
 
-    # Always-on Kaboomberg block (hidden quest field office). 4 RBStars
-    # and an infinite-annex placeholder.
     kaboomberg_line1 = " ".join([
         _b("[:unlock:]"),
         _b(f"[{STAR_PERFECT * 4}]"),
@@ -926,19 +895,16 @@ def format_information(
                 zone_id = 0
             street = ZONE_NAMES.get(zone_id, f"Zone {zone_str}")
             difficulty = int(fo.get("difficulty", 0)) + 1  # zero-indexed
-            # GoldenStar emoji per spec — replaces the default :star:.
             stars = STAR_GREAT * difficulty
             annexes = fo.get("annexes", "?")
             is_full = not fo.get("open")
             open_state = ":lock:" if is_full else ":unlock:"
 
-            # Line 1: [emoji] [stars] [street]
             line1 = " ".join([
                 _b(f"[{open_state}]"),
                 _b(f"[{stars}]"),
                 _b(f"[{street}]"),
             ])
-            # Line 2: [N Annexes Remaining] [FULL?]
             line2_parts = [_b(f"[{annexes} Annexes Remaining]")]
             if is_full:
                 line2_parts.append(_b("[FULL]"))
@@ -947,8 +913,6 @@ def format_information(
     parts.append("**Field Offices**\n\n" + "\n\n".join(fo_blocks))
 
     # --- Last updated (live relative timestamp) ------------------
-    # Discord renders <t:EPOCH:R> as a live-updating "x seconds ago"
-    # label that ticks forward without us having to edit the message.
     now_epoch = int(datetime.now(timezone.utc).timestamp())
     parts.append(f"***Last updated: <t:{now_epoch}:R>***")
 
@@ -1067,19 +1031,7 @@ _SILLYMETER_TOTAL = 5_000_000
 
 
 def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
-    """Embed for the #tt-information channel showing Silly Meter status.
-
-    Actual API fields (confirmed from live response):
-      state             -- "Active" while meter is filling; changes when won
-      rewards           -- list[str]  team names (parallel with descriptions)
-      rewardDescriptions-- list[str]  short descriptions from TTR
-      rewardPoints      -- list       usually [None, None, None]
-      winner            -- str | None team name when a winner is active
-      winnerId          -- int        0 while no winner
-      hp                -- int        accumulated points so far (total goal = 5,000,000)
-      asOf              -- int        unix timestamp of this snapshot
-      nextUpdateTimestamp -- int      when meter next ticks / next cycle begins
-    """
+    """Embed for the #tt-information channel showing Silly Meter status."""
     embed = discord.Embed(title=":circus_tent: Silly Meter", color=TTR_COLOR)
 
     if data is None:
@@ -1100,7 +1052,6 @@ def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
     if not isinstance(descs, list):
         descs = []
 
-    # Determine accumulated points
     try:
         accumulated = int(hp) if hp is not None else 0
     except (TypeError, ValueError):
@@ -1134,13 +1085,13 @@ def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
             if team_blocks:
                 embed.add_field(
                     name="Upcoming Rewards",
-                    value="\n\u200b\n".join(team_blocks),
+                    value="\n​\n".join(team_blocks),
                     inline=False,
                 )
         if next_ts:
             try:
                 embed.add_field(
-                    name="\u200b",
+                    name="​",
                     value=f":clock3: **Next Silly Cycle begins** <t:{int(next_ts)}:R> — <t:{int(next_ts)}:t>",
                     inline=False,
                 )
@@ -1154,7 +1105,7 @@ def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
         embed.description = (
             "**The Silly Meter is filling up...**"
             f"\n***{remaining:,} Global Silly Points to go!***"
-            f"\n\u200b\n{accumulated:,} / {_SILLYMETER_TOTAL:,} ({pct:.0f}%)"
+            f"\n​\n{accumulated:,} / {_SILLYMETER_TOTAL:,} ({pct:.0f}%)"
         )
         if rewards:
             team_blocks_active: list[str] = []
@@ -1169,7 +1120,7 @@ def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
             if team_blocks_active:
                 embed.add_field(
                     name="Competing Teams",
-                    value="\n\u200b\n".join(team_blocks_active),
+                    value="\n​\n".join(team_blocks_active),
                     inline=False,
                 )
 

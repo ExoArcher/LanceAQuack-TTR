@@ -14,6 +14,7 @@ How it works
    message in each, and stores the message IDs in ``state.json``.
 3. A background task runs every ``$REFRESH_INTERVAL`` seconds, fetches
    the TTR APIs ONCE, and edits each tracked guild's messages in place.
+   Doodle embeds are only updated every 12 hours (or on /laq-refresh).
 4. A separate sweep task runs every 15 minutes removing stale bot messages.
 
 Slash commands (all users)
@@ -114,6 +115,7 @@ WELCOMED_FILE  = Path(__file__).with_name("welcomed_users.json")
 BANNED_FILE    = Path(__file__).with_name("banned_users.json")
 ANNOUNCEMENT_TITLE = "📢 LAQ Bot Announcement"
 ANNOUNCEMENT_TTL_SECONDS = 30 * 60
+DOODLE_REFRESH_INTERVAL = 12 * 60 * 60  # 12 hours in seconds
 
 # Shown to any guild owner whose server fails the allowlist check.
 CLOSED_ACCESS_MSG = (
@@ -137,6 +139,9 @@ class TTRBot(discord.Client):
         self._state_lock = asyncio.Lock()
         # Set by Console 'stop' so close() skips its own duplicate broadcast.
         self._console_stop_sent: bool = False
+        # Timestamp of the last time doodle embeds were pushed to Discord.
+        # 0.0 means never — triggers an immediate doodle refresh on first run.
+        self._last_doodle_refresh: float = 0.0
 
     # ------------------------------------------------------------------ state
 
@@ -272,8 +277,6 @@ class TTRBot(discord.Client):
                 self._guilds_block().pop(gid, None)
 
         # Per-guild command sync: clears old names and registers new ones.
-        # Guild syncs propagate instantly; this also removes leftover
-        # ttr_refresh / laq_guild_add commands from previous versions.
         for guild in list(self.guilds):
             if not self.is_guild_allowed(guild.id):
                 continue
@@ -306,18 +309,10 @@ class TTRBot(discord.Client):
         await self._save_state()
 
     async def _sync_commands_to_guild(self, guild: discord.Guild) -> None:
-        """Aggressively wipe all old per-guild commands then push the new set.
-
-        Two-phase sync:
-          1. Push an empty tree -> Discord deletes every guild-specific command
-             (removes ttr_setup, ttr_refresh, laq_guild_add, duplicates, etc.)
-          2. Copy the in-memory global tree and push -> registers new /laq-* commands.
-        """
+        """Aggressively wipe all old per-guild commands then push the new set."""
         try:
-            # Phase 1 -- nuke everything Discord knows about this guild.
             self.tree.clear_commands(guild=guild)
             await self.tree.sync(guild=guild)
-            # Phase 2 -- register the current command set.
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
             log.info("Command sync OK for %s (id=%s)", guild.name, guild.id)
@@ -392,8 +387,6 @@ class TTRBot(discord.Client):
                 log.warning("No permission to fetch message in #%s", channel.name)
                 verified.append(mid)
             except discord.HTTPException as e:
-                # Transient Discord error (e.g. 503) -- assume message still exists,
-                # keep the ID and retry next cycle rather than creating a duplicate.
                 log.warning("Transient HTTP %s verifying message %s in #%s -- keeping ID.", e.status, mid, channel.name)
                 verified.append(mid)
         while len(verified) < at_least:
@@ -404,15 +397,11 @@ class TTRBot(discord.Client):
 
     # ------------------------------------------------------- announcement cleanup
 
-
     async def _ensure_suit_calculator_pin(
         self, guild_id: int, channel: discord.TextChannel,
     ) -> None:
         """
         Post (or edit in place) the 4 static info embeds in #suit-calculator.
-        State stored under guild -> 'suit_calculator' -> {channel_id, message_ids: [id*4]}.
-        Edits existing messages in place on re-setup / startup / laq-refresh.
-        NOT updated by the 90-second refresh loop -- only on startup and /laq-refresh.
         """
         embeds  = build_suit_calculator_embeds()
         gs      = self._guild_state(guild_id)
@@ -424,7 +413,6 @@ class TTRBot(discord.Client):
             if isinstance(raw_ids, list):
                 stored_ids = [int(i) for i in raw_ids if i]
 
-        # Try to edit existing messages in place
         verified_ids: list[int] = []
         for i, embed in enumerate(embeds):
             mid = stored_ids[i] if i < len(stored_ids) else None
@@ -440,7 +428,6 @@ class TTRBot(discord.Client):
                     log.info("[suit-calc] Embed %d gone for guild %s -- reposting.", i+1, guild_id)
                 except discord.HTTPException as exc:
                     log.warning("[suit-calc] Could not edit embed %d: %s", i+1, exc)
-            # Post a new message for this embed
             try:
                 new_msg = await channel.send(embed=embed)
                 if i == 0:
@@ -459,10 +446,7 @@ class TTRBot(discord.Client):
             gs["suit_calculator"] = {"channel_id": channel.id, "message_ids": verified_ids}
 
     async def _refresh_suit_calculator_all_guilds(self) -> None:
-        """
-        Refresh the suit-calculator embeds for every tracked guild.
-        Called on startup and on /laq-refresh. NOT part of the 90s loop.
-        """
+        """Refresh the suit-calculator embeds for every tracked guild."""
         calc_name = self.config.channel_suit_calculator
         updated   = 0
         for guild_id_str in list(self._guilds_block().keys()):
@@ -477,7 +461,6 @@ class TTRBot(discord.Client):
             channel_id = int(entry.get("channel_id", 0)) if isinstance(entry, dict) else 0
             channel = self.get_channel(channel_id) if channel_id else None
             if not isinstance(channel, discord.TextChannel):
-                # Fall back to searching by name
                 guild = self.get_guild(guild_id)
                 channel = (
                     discord.utils.get(guild.text_channels, name=calc_name)
@@ -516,7 +499,6 @@ class TTRBot(discord.Client):
         cleared = 0
         failed = 0
 
-        # Delete any tracked announcement messages from the previous session.
         stale_records = list(self._announcements())
         if stale_records:
             log.info("Startup cleanup: found %d tracked announcement(s) to clear.", len(stale_records))
@@ -527,7 +509,6 @@ class TTRBot(discord.Client):
             except Exception:
                 failed += 1
 
-        # Scan information channels for orphaned announcement embeds not in state.
         for guild_id_str, gs in list(self._guilds_block().items()):
             try:
                 guild_id = int(guild_id_str)
@@ -788,8 +769,7 @@ class TTRBot(discord.Client):
     # ------------------------------------------------- maintenance broadcast
 
     async def _broadcast_maintenance(self) -> None:
-        """Send a maintenance embed to every tracked guild info channel.
-        Stores message IDs in state so startup cleanup can remove them."""
+        """Send a maintenance embed to every tracked guild info channel."""
         embed = discord.Embed(
             title=":wrench: Temporary Maintenance",
             description=(
@@ -844,10 +824,20 @@ class TTRBot(discord.Client):
         if cleaned:
             log.info("Startup cleanup: removed %d maintenance notice(s).", cleaned)
 
-    async def _refresh_once(self) -> None:
+    async def _refresh_once(self, *, force_doodles: bool = False) -> None:
+        """Refresh all live feed embeds across tracked guilds.
+
+        Doodle embeds are throttled to once every 12 hours unless
+        *force_doodles* is True (set by /laq-refresh).
+        """
         if self._api is None:
             return
         async with self._refresh_lock:
+            now = time.time()
+            refresh_doodles = force_doodles or (
+                (now - self._last_doodle_refresh) >= DOODLE_REFRESH_INTERVAL
+            )
+
             api_data = await self._fetch_all()
             total_messages = 0
             guilds_updated: set[int] = set()
@@ -859,6 +849,10 @@ class TTRBot(discord.Client):
                 if not self.is_guild_allowed(guild_id) or self.get_guild(guild_id) is None:
                     continue
                 for feed_key in self.config.feeds():
+                    # Skip doodle embeds unless the 12-hour interval has elapsed
+                    # (or this is a forced refresh from /laq-refresh).
+                    if feed_key == "doodles" and not refresh_doodles:
+                        continue
                     try:
                         updated = await self._update_feed(guild_id, feed_key, api_data)
                         if updated:
@@ -866,6 +860,13 @@ class TTRBot(discord.Client):
                             guilds_updated.add(guild_id)
                     except Exception:
                         log.exception("Failed updating %s/%s", guild_id, feed_key)
+
+            if refresh_doodles:
+                self._last_doodle_refresh = now
+                log.info(
+                    "Doodle embeds refreshed (next automatic refresh in 12 hours)."
+                )
+
             if total_messages:
                 log.info(
                     "Embed refresh: %d message(s) updated across %d server(s)",
@@ -908,7 +909,6 @@ class TTRBot(discord.Client):
                 kept_ids.append(new_msg.id)
                 edited += 1
             except discord.HTTPException as e:
-                # Transient Discord error (e.g. 503) -- keep the ID and retry next cycle.
                 log.warning("Transient HTTP %s editing message %s (%s/%s) -- will retry.", e.status, mid, guild_id, feed_key)
                 kept_ids.append(mid)
             await asyncio.sleep(3.0)
@@ -1076,13 +1076,13 @@ class TTRBot(discord.Client):
             msg = (
                 f":link: **Add LanceAQuack TTR to your Discord account**\n"
                 f"{link}\n"
-                f"\u200b\n"
+                f"​\n"
                 f"**About the bot**\n"
                 f"LanceAQuack TTR is a Toontown Rewritten companion bot. "
                 f"It delivers live game data -- district populations, cog invasions, "
                 f"active field offices, Silly Meter status, and the full doodle guide -- "
                 f"directly to your DMs from anywhere in Discord.\n"
-                f"\u200b\n"
+                f"​\n"
                 f"**Permissions requested**\n"
                 f"This is a **User App install** -- it does **not** join your server and "
                 f"requires **no server permissions**. "
@@ -1115,21 +1115,21 @@ class TTRBot(discord.Client):
             msg = (
                 f":link: **Add LanceAQuack TTR to a server**\n"
                 f"{link}\n"
-                f"\u200b\n"
+                f"​\n"
                 f"**About the bot**\n"
                 f"LanceAQuack TTR is a Toontown Rewritten companion bot. "
                 f"When added to a server it automatically creates a **#tt-information** "
                 f"channel and a **#tt-doodles** channel. These are kept up to date "
                 f"with live TTR data: district populations, cog invasions, field offices, "
                 f"the Silly Meter, and the full doodle buying guide.\n"
-                f"\u200b\n"
+                f"​\n"
                 f"**Permissions requested**\n"
-                f"\u2022 **Manage Channels** -- create the `#tt-information` and `#tt-doodles` channels on setup.\n"
-                f"\u2022 **Send Messages** -- post live game data into those channels.\n"
-                f"\u2022 **Manage Messages** -- edit and clean up its own posts as data updates.\n"
-                f"\u2022 **Embed Links** -- display rich embeds with formatted game information.\n"
-                f"\u2022 **Read Message History** -- locate and update previously posted embeds.\n"
-                f"\u2022 **View Channels** -- see the channels it manages.\n"
+                f"• **Manage Channels** -- create the `#tt-information` and `#tt-doodles` channels on setup.\n"
+                f"• **Send Messages** -- post live game data into those channels.\n"
+                f"• **Manage Messages** -- edit and clean up its own posts as data updates.\n"
+                f"• **Embed Links** -- display rich embeds with formatted game information.\n"
+                f"• **Read Message History** -- locate and update previously posted embeds.\n"
+                f"• **View Channels** -- see the channels it manages.\n"
                 f"\nThe bot does **not** read general chat messages and only operates in the channels it creates."
             )
             try:
@@ -1193,7 +1193,9 @@ class TTRBot(discord.Client):
         @app_commands.guild_only()
         async def laq_refresh(interaction: discord.Interaction) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
-            await self._refresh_once()
+            # force_doodles=True bypasses the 12-hour throttle so doodles
+            # are always included when a user manually triggers a refresh.
+            await self._refresh_once(force_doodles=True)
             swept = 0
             if interaction.guild is not None:
                 try:
