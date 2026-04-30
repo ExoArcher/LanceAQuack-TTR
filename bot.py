@@ -652,6 +652,9 @@ class TTRBot(discord.Client):
                     pass
         except discord.Forbidden:
             log.debug("No Read Message History in #%s; skipping sweep", channel.name)
+        except discord.DiscordServerError as exc:
+            # Transient 503 -- skip this channel and retry next sweep cycle.
+            log.warning("Discord 503 during sweep of #%s -- skipping: %s", channel.name, exc)
         return deleted
 
     async def _sweep_guild_stale(self, guild_id: int) -> int:
@@ -941,7 +944,12 @@ class TTRBot(discord.Client):
     # ══════════════════════════════════════════════════════════════════════════
 
     async def _broadcast_maintenance(self) -> None:
-        """Send a maintenance embed to every tracked guild's #tt-information channel."""
+        """Send a maintenance embed to ALL tracked channels in every guild.
+
+        Sends to #tt-information, #tt-doodles, and #suit-calculator.
+        Stores every sent message as a list of records in state so
+        _cleanup_maintenance_msgs can delete them all on next startup.
+        """
         embed = discord.Embed(
             title=":wrench: Temporary Maintenance",
             description=(
@@ -952,36 +960,73 @@ class TTRBot(discord.Client):
             color=0xE67E22,
             timestamp=datetime.now(timezone.utc),
         )
-        maintenance_ids: dict[str, int] = {}
+        records: list[dict] = []
+
         for guild_id_str, gs in list(self._guilds_block().items()):
-            info_entry = gs.get("information")
-            if not info_entry:
-                continue
-            channel = self.get_channel(int(info_entry["channel_id"]))
-            if not isinstance(channel, discord.TextChannel):
-                continue
-            try:
-                msg = await channel.send(embed=embed)
-                maintenance_ids[guild_id_str] = msg.id
-                log.info("Sent maintenance notice to guild %s", guild_id_str)
-            except Exception as exc:
-                log.warning("Could not send maintenance notice to %s: %s", guild_id_str, exc)
-        if maintenance_ids:
-            self.state["maintenance_msgs"] = maintenance_ids
+            # All three managed channels
+            channel_entries = []
+            for feed_key in ("information", "doodles"):
+                entry = gs.get(feed_key)
+                if entry:
+                    channel_entries.append(int(entry.get("channel_id", 0)))
+            # suit_calculator
+            sc_entry = gs.get("suit_calculator")
+            if sc_entry:
+                channel_entries.append(int(sc_entry.get("channel_id", 0)))
+
+            for channel_id in channel_entries:
+                if not channel_id:
+                    continue
+                channel = self.get_channel(channel_id)
+                if not isinstance(channel, discord.TextChannel):
+                    continue
+                try:
+                    msg = await channel.send(embed=embed)
+                    records.append({
+                        "guild_id":   guild_id_str,
+                        "channel_id": str(channel_id),
+                        "message_id": msg.id,
+                    })
+                    log.info("Sent maintenance notice to guild %s #%s",
+                             guild_id_str, channel.name)
+                except Exception as exc:
+                    log.warning("Could not send maintenance notice to %s/%s: %s",
+                                guild_id_str, channel_id, exc)
+
+        if records:
+            self.state["maintenance_msgs"] = records
             await self._save_state()
 
     async def _cleanup_maintenance_msgs(self) -> None:
-        """Delete maintenance messages left from the previous shutdown."""
-        maintenance_ids: dict[str, int] = self.state.pop("maintenance_msgs", {})
-        if not maintenance_ids:
+        """Delete maintenance messages left from the previous shutdown.
+
+        Handles both the new list format (list of {guild_id, channel_id, message_id})
+        and the legacy dict format ({guild_id_str: msg_id}) for backward compat.
+        """
+        raw = self.state.pop("maintenance_msgs", None)
+        if not raw:
             return
+
+        # Normalise to list of (channel_id, message_id) tuples
+        records: list[tuple[int, int]] = []
+        if isinstance(raw, list):
+            for r in raw:
+                try:
+                    records.append((int(r["channel_id"]), int(r["message_id"])))
+                except (KeyError, TypeError, ValueError):
+                    pass
+        elif isinstance(raw, dict):
+            # Legacy format: {guild_id_str: msg_id} — channel was always #tt-information
+            for guild_id_str, msg_id in raw.items():
+                gs = self._guilds_block().get(guild_id_str, {})
+                info = gs.get("information", {})
+                ch_id = int(info.get("channel_id", 0)) if info else 0
+                if ch_id:
+                    records.append((ch_id, int(msg_id)))
+
         cleaned = 0
-        for guild_id_str, msg_id in maintenance_ids.items():
-            gs         = self._guilds_block().get(guild_id_str, {})
-            info_entry = gs.get("information")
-            if not info_entry:
-                continue
-            channel = self.get_channel(int(info_entry["channel_id"]))
+        for channel_id, msg_id in records:
+            channel = self.get_channel(channel_id)
             if not isinstance(channel, discord.TextChannel):
                 continue
             try:
@@ -990,6 +1035,7 @@ class TTRBot(discord.Client):
                 cleaned += 1
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 pass
+
         await self._save_state()
         if cleaned:
             log.info("Startup cleanup: removed %d maintenance notice(s).", cleaned)

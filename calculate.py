@@ -444,7 +444,7 @@ def build_options(pts: int, activities: list[Activity],
     if worst != best:
         n2 = _ceil_runs(pts, worst)
         collected.append({
-            "label": "Accessible",
+            "label": "Uber Friendly",
             "emoji": "⚡",
             "plan":  [(worst, n2)],
             "total": n2,
@@ -511,7 +511,7 @@ def build_suit_calculator_embeds() -> list[discord.Embed]:
             "The Suit-O-Nomics Calculator-inator takes your current cog suit level "
             "and how many points you've already earned, then calculates exactly how "
             "many facility runs stand between you and your next boss fight.\n\n"
-            "Three plans are returned — Fastest, Accessible, and a Smart Mix — "
+            "Three plans are returned — Fastest, Uber Friendly, and a Smart Mix — "
             "each showing the minimum number of runs for a different play style.\n\n"
             "Results are sent as a private reply so feel free to use it any time, right here."
         ),

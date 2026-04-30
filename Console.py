@@ -186,8 +186,8 @@ async def _handle_restart(bot) -> None:
 
 async def _handle_maintenance(bot) -> None:
     """
-    Toggle a persistent maintenance banner in BOTH #tt-information and #tt-doodles
-    for every tracked guild.
+    Toggle a persistent maintenance banner in #tt-information, #tt-doodles,
+    and #suit-calculator for every tracked guild.
 
     ON  -- sends the embed to both channels, stores message IDs in maintenance_mode.json.
     OFF -- deletes all stored banner messages and clears the file.
@@ -250,7 +250,7 @@ async def _handle_maintenance(bot) -> None:
 
         for guild_id_str, gs in list(guilds_block.items()):
             guild_msgs = {}
-            for feed_key in ("information", "doodles"):
+            for feed_key in ("information", "doodles", "suit_calculator"):
                 entry = gs.get(feed_key)
                 if not entry:
                     continue
@@ -352,26 +352,38 @@ def _channel_id_for_feed(bot, guild_id_str: str, feed_key: str) -> int | None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _broadcast_to_all_info_channels(bot, embed: discord.Embed) -> None:
+    """Broadcast embed to all three managed channels in every tracked guild."""
     guilds_block = bot.state.get("guilds", {})
     sent   = 0
     failed = 0
 
     for guild_id_str, gs in list(guilds_block.items()):
-        info_entry = gs.get("information")
-        if not info_entry:
-            continue
-        channel = bot.get_channel(int(info_entry.get("channel_id", 0)))
-        if not isinstance(channel, discord.TextChannel):
-            continue
-        try:
-            await channel.send(embed=embed)
-            sent += 1
-            log.info("[console] Broadcast sent to guild %s", guild_id_str)
-        except Exception as exc:
-            log.warning("[console] Broadcast failed for guild %s: %s", guild_id_str, exc)
-            failed += 1
+        for feed_key in ("information", "doodles", "suit_calculator"):
+            entry = gs.get(feed_key)
+            if not entry:
+                continue
+            channel_id = 0
+            try:
+                channel_id = int(entry.get("channel_id", 0))
+            except (TypeError, ValueError):
+                pass
+            if not channel_id:
+                continue
+            channel = bot.get_channel(channel_id)
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            try:
+                await channel.send(embed=embed)
+                sent += 1
+                log.info("[console] Broadcast sent to guild %s #%s",
+                         guild_id_str, channel.name)
+            except Exception as exc:
+                log.warning("[console] Broadcast failed for guild %s #%s: %s",
+                            guild_id_str, feed_key, exc)
+                failed += 1
 
     print(
-        f"[console] Broadcast complete -- {sent} server(s) notified, {failed} failed.",
+        f"[console] Broadcast complete -- {sent} message(s) across all channels, "
+        f"{failed} failed.",
         flush=True,
     )
