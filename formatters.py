@@ -1,499 +1,1166 @@
-# -*- coding: utf-8 -*-
-"""
-formatters.py — Discord embed builders for LanceAQuack TTR.
+"""Turn raw TTR API JSON into Discord embeds.
 
-IMPORTANT DISCORD EMBED RULES applied here:
-  - <t:unix:R> timestamps render ONLY in descriptions and field values,
-    NOT in footer text.  All "Updated" timestamps go in descriptions.
-  - Total embed size limit = 6000 chars.  Doodle descriptions are
-    truncated before they hit that limit.
-
-Official TTR API field names used throughout:
-  invasions    {"invasions": {district: {type, progress, asOf}}, "lastUpdated"}
-  population   {"populationByDistrict": {district: int}, "totalPopulation", "lastUpdated"}
-  fieldoffices {"fieldOffices": {zone_id: {department, difficulty (0-indexed),
-                                  annexes, open, expiring}}, "lastUpdated"}
-  sillymeter   {"state": "Active"|"Reward"|"Inactive",
-                "hp": 0-5000000, "rewards": [str×3],
-                "rewardDescriptions": [str×3], "winner": str|null,
-                "rewardPoints": {team:int}|null,
-                "nextUpdateTimestamp": int, "asOf": int}
-  doodles      {district: {playground: [{dna, traits, cost}]}}
-               (top-level IS the district dict; cost not price)
+Each formatter returns a `discord.Embed` (or a list of embeds when one
+message would overflow). Discord caps embeds at 6000 chars total and each
+field value at 1024, so the formatters keep things conservative.
 """
 from __future__ import annotations
 
 import os
-import time
+from datetime import datetime, timezone
 from typing import Any
 
 import discord
-from dotenv import load_dotenv
 
-load_dotenv()
+# --- Doodle trait tiers -----------------------------------------------
+#
+# Each trait maps to one tier. The tier determines which star emoji
+# appears in that trait's slot, and (alongside slot position for the
+# special "Rarely Tired" trait) which embed the doodle ends up in.
+#
+# Tiers, best -> worst:
+#   perfect : "Rarely Tired" in slot 0 (max trick-uses before tiring)
+#   amazing : "Rarely Tired" in any other slot
+#   great   : the 10 "Always Affectionate/Playful" + "Rarely X" traits
+#   good    : Often Affectionate/Playful, Pretty Calm/Excitable
+#   ok      : Rarely Affectionate/Playful, all Sometimes traits
+#   bad     : Always/Often negative traits
 
-# ── Custom emoji from .env ────────────────────────────────────────────────────
-JELLYBEAN   = os.getenv("JELLYBEAN_EMOJI",  "🫙")
-COG_EMOJI   = os.getenv("COG_EMOJI",        "⚙️")
-SAFE_EMOJI  = os.getenv("SAFE_EMOJI",       "🛡️")
-INFINITE    = os.getenv("INFINITE_EMOJI",   "♾️")
-
-STAR_PERFECT = os.getenv("STAR_PERFECT", "⭐")
-STAR_AMAZING = os.getenv("STAR_AMAZING", "⭐")
-STAR_GREAT   = os.getenv("STAR_GREAT",   "🌟")
-STAR_GOOD    = os.getenv("STAR_GOOD",    "✨")
-STAR_OK      = os.getenv("STAR_OK",      "💫")
-STAR_BAD     = os.getenv("STAR_BAD",     "🗑️")
-
-# ── Constants ─────────────────────────────────────────────────────────────────
-MEGA_SAFE_DISTRICTS = frozenset({
-    "Blam Canyon", "Gulp Gulch", "Whoosh Rapids", "Zapwood", "Welcome Valley",
-})
-
-SILLY_MAX_HP = 5_000_000
-
-# Embed description safety limit — leaves headroom under Discord's 6000-char total cap
-_DESC_LIMIT = 3_800
-
-# ── Field Office zone IDs (official API lookup table) ─────────────────────────
-ZONE_NAMES: dict[str, str] = {
-    "3100": "Walrus Way",         "3200": "Sleet Street",
-    "3300": "Polar Place",
-    "4100": "Alto Avenue",        "4200": "Baritone Boulevard",
-    "4300": "Tenor Terrace",
-    "5100": "Elm Street",         "5200": "Maple Street",
-    "5300": "Oak Street",
-    "9100": "Lullaby Lane",       "9200": "Pajama Place",
+GREAT_TRAITS: set[str] = {
+    "Always Affectionate",
+    "Always Playful",
+    "Rarely Bored",
+    "Rarely Confused",
+    "Rarely Forgets",
+    "Rarely Grumpy",
+    "Rarely Hungry",
+    "Rarely Lonely",
+    "Rarely Restless",
+    "Rarely Sad",
 }
 
-_PLAYGROUND_EMOJI: dict[str, str] = {
-    "Toontown Central":    "🌐",
-    "Donald's Dock":       "⚓",
-    "Daisy Gardens":       "🌼",
-    "Minnie's Melodyland": "🎵",
-    "The Brrrgh":          "❄️",
-    "Donald's Dreamland":  "🌙",
+GOOD_TRAITS: set[str] = {
+    "Often Affectionate",
+    "Often Playful",
+    "Pretty Calm",
+    "Pretty Excitable",
 }
 
-_SILLY_TEAM_DESC: dict[str, str] = {
-    "The Silliest":      "Toons are at peak silliness — everything is funnier than usual!",
-    "United Toon Front": "All Toons unite under one banner for maximum toony power.",
-    "Resistance Rangers":"The Resistance strikes back! Defenders of Toontown stand ready.",
-    "Toon Troopers":     "Toon Troopers march forward, gags at the ready.",
-    "Bean Counters":     "The Cogbucks are flowing — Cashbots beware of extra-savvy Toons.",
-    "Daffy Dandies":     "Extra flair and extra laughs — style is the weapon of choice.",
-    "Nature Lovers":     "Toons in harmony with Toontown's greenery. Flower power!",
-    "Schemers":          "Toons with a plan. Watch out, Cogs — these Toons mean business.",
-    "Tech Savvy":        "Gadgets, gizmos, and gags — these Toons have all the tools.",
-    "Jokemasters":       "Puns, pratfalls, and punchlines — the funniest Toons in town.",
+OK_TRAITS: set[str] = {
+    "Rarely Affectionate",
+    "Rarely Playful",
+    "Sometimes Bored",
+    "Sometimes Confused",
+    "Sometimes Forgets",
+    "Sometimes Grumpy",
+    "Sometimes Hungry",
+    "Sometimes Lonely",
+    "Sometimes Restless",
+    "Sometimes Sad",
+    "Sometimes Tired",
+    # These two real TTR traits weren't in the user's tier list. Treating
+    # them as OK (neutral) for now; move to GOOD_TRAITS if you'd rather
+    # rate them higher.
+    "Sometimes Affectionate",
+    "Sometimes Playful",
 }
 
-_TRAIT_RANK: dict[str, int] = {
-    "Rarely Tired":          0,
-    "Always Affectionate":   1, "Always Playful":    1,
-    "Often Affectionate":    2, "Often Playful":     2,
-    "Rarely Affectionate":   3, "Rarely Playful":    3,
-    "Sometimes Affectionate":4, "Sometimes Playful": 4,
-    "Pretty Calm":           5, "Pretty Excitable":  5,
-    "Often Tired":           8, "Always Tired":      9,
-    "Often Bored":           8, "Always Bored":      9,
-    "Often Cranky":          8, "Always Cranky":     9,
-    "Often Lonely":          8, "Always Lonely":     9,
+BAD_TRAITS: set[str] = {
+    "Always Bored",
+    "Always Confused",
+    "Always Forgets",
+    "Always Grumpy",
+    "Always Hungry",
+    "Always Lonely",
+    "Always Restless",
+    "Always Sad",
+    "Always Tired",
+    "Often Bored",
+    "Often Confused",
+    "Often Forgets",
+    "Often Grumpy",
+    "Often Hungry",
+    "Often Lonely",
+    "Often Restless",
+    "Often Sad",
+    "Often Tired",
 }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+def trait_tier(trait: str, slot: int) -> str:
+    """Tier for a trait at a given slot (0..3).
 
-def _updated_line() -> str:
+    Returns one of: 'perfect', 'amazing', 'great', 'good', 'ok', 'bad'.
+    Unlisted traits fall back to 'ok' (silver star, neutral) rather
+    than 'bad' — safer if TTR ever adds a new trait we haven't mapped.
+    Only 'Rarely Tired' cares about slot.
     """
-    Returns a 'Updated <t:unix:R>' string for embedding in a description.
+    if trait == "Rarely Tired":
+        return "perfect" if slot == 0 else "amazing"
+    if trait in GREAT_TRAITS:
+        return "great"
+    if trait in GOOD_TRAITS:
+        return "good"
+    if trait in OK_TRAITS:
+        return "ok"
+    if trait in BAD_TRAITS:
+        return "bad"
+    return "ok"
 
-    NOTE: Discord renders <t:unix:R> only in message content, embed descriptions,
-    and embed field values — NOT in embed footer text.
-    Always append this to the embed description, never use set_footer() with it.
+
+# Priority class — lower is better. Determines the order doodles flow
+# into the embeds below.
+#
+#   0 PERFECT       : Rainbow in slot 0 + exactly 3 Gold (Great) in slots 1-3.
+#   1 AMAZING       : one Crystal (Rarely Tired NOT in slot 0) + 3 Gold.
+#   2 GREAT         : 4 Gold (Great) traits, no Rarely Tired.
+#   3 GREAT_GOOD    : every trait is Rarely Tired / Great / Good (mixed).
+#   4 GREAT_GOOD_OK : every trait is Rarely Tired / Great / Good / OK (mixed).
+#   5 REST          : at least one Bad trait, or fewer than 4 traits.
+PRIORITY_PERFECT = 0
+PRIORITY_AMAZING = 1
+PRIORITY_GREAT = 2
+PRIORITY_GREAT_GOOD = 3
+PRIORITY_GREAT_GOOD_OK = 4
+PRIORITY_REST = 5
+
+# Back-compat alias so callers that imported the old name keep working.
+PRIORITY_ALL_GOLD = PRIORITY_GREAT
+
+# Per-tier weight used as a quality tiebreaker within a priority bucket
+# (higher = better). Two doodles in the same bucket can still differ by
+# a lot — e.g. 3 Great + 1 Good beats 2 Great + 2 Good inside
+# GREAT_GOOD — and this weight restores that ordering so higher-scoring
+# doodles always print above lower-scoring ones.
+_TIER_WEIGHT = {
+    "perfect": 5,
+    "amazing": 4,
+    "great": 3,
+    "good": 2,
+    "ok": 1,
+    "bad": 0,
+}
+
+
+def doodle_priority(traits: list[str]) -> int:
+    """Classify a doodle into the six priority buckets.
+
+    Strict thresholds (anything outside these is Bad and not shown):
+      Perfect : Rarely Tired in slot 0  +  3 Great
+      Amazing : 1 Rarely Tired (any slot) + 3 Great
+      Great   : 4 Great  (no Rarely Tired)
+      Good    : 3 Great  + 1 Good
+      OK      : 2 Great  + 2 Good
+      Bad     : everything else (any bad trait, any OK trait, etc.)
     """
-    return f"*Updated <t:{int(time.time())}:R>*"
+    traits = traits or []
+    if len(traits) != 4:
+        return PRIORITY_REST
+
+    tiers = tuple(trait_tier(t, i) for i, t in enumerate(traits))
+
+    # Any bad trait → Bad immediately.
+    if "bad" in tiers:
+        return PRIORITY_REST
+
+    n_perfect = tiers.count("perfect")   # Rarely Tired in slot 0
+    n_amazing  = tiers.count("amazing")  # Rarely Tired in slots 1-3
+    n_great    = tiers.count("great")
+    n_good     = tiers.count("good")
+    n_ok       = tiers.count("ok")
+    n_rt       = n_perfect + n_amazing   # total Rarely Tired count
+
+    # Any OK trait drops below the minimum threshold.
+    if n_ok:
+        return PRIORITY_REST
+
+    # Perfect: EXACTLY Rarely Tired in slot 0 + 3 Great.
+    if tiers == ("perfect", "great", "great", "great"):
+        return PRIORITY_PERFECT
+
+    # Amazing: exactly 1 Rarely Tired (any slot) + exactly 3 Great.
+    if n_rt == 1 and n_great == 3 and n_good == 0:
+        return PRIORITY_AMAZING
+
+    # Great: exactly 4 Great, no Rarely Tired.
+    if n_great == 4 and n_rt == 0 and n_good == 0:
+        return PRIORITY_GREAT
+
+    # Good: exactly 3 Great + 1 Good, no Rarely Tired.
+    if n_great == 3 and n_good == 1 and n_rt == 0:
+        return PRIORITY_GREAT_GOOD
+
+    # OK: exactly 2 Great + 2 Good, no Rarely Tired.
+    if n_great == 2 and n_good == 2 and n_rt == 0:
+        return PRIORITY_GREAT_GOOD_OK
+
+    # Everything else: Bad — not shown.
+    return PRIORITY_REST
 
 
-def _safe_get(data: dict | None, *keys: str, default: Any = None) -> Any:
-    cur = data
-    for k in keys:
-        if not isinstance(cur, dict):
-            return default
-        cur = cur.get(k, default)
-    return cur
+def doodle_quality(traits: list[str]) -> int:
+    """Sum of per-slot tier weights — higher is better.
 
-
-def _fallback_desc(name: str) -> str:
-    low = name.lower()
-    for key, desc in _SILLY_TEAM_DESC.items():
-        if key.lower() in low:
-            return desc
-    return ""
-
-
-def _ts(unix: int | float | None) -> str:
-    if not unix:
-        return ""
-    return f"<t:{int(unix)}:R>"
-
-
-def _truncate_desc(parts: list[str], separator: str = "\n\n",
-                   limit: int = _DESC_LIMIT) -> tuple[str, int]:
+    Used as a tiebreaker inside a priority bucket so e.g. a
+    3-Gold + 1-Half doodle prints above a 2-Gold + 2-Half one.
     """
-    Join parts with separator, stopping before the total exceeds limit.
-    Returns (joined_text, number_of_parts_omitted).
-    """
-    lines: list[str] = []
-    total = 0
-    omitted = 0
-    for i, part in enumerate(parts):
-        addition = (len(separator) if lines else 0) + len(part)
-        if total + addition > limit:
-            omitted = len(parts) - i
-            break
-        lines.append(part)
-        total += addition
-    return separator.join(lines), omitted
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Embed 1 — Districts & Invasions
-# ══════════════════════════════════════════════════════════════════════════════
-
-def format_information(
-    invasions: dict | None = None,
-    population: dict | None = None,
-    fieldoffices: dict | None = None,
-) -> discord.Embed:
-    inv_map = _safe_get(invasions, "invasions") or {}
-    pop_map = _safe_get(population, "populationByDistrict") or {}
-    total   = _safe_get(population, "totalPopulation") or sum(pop_map.values()) or 0
-
-    embed = discord.Embed(title="🌎  Districts & Invasions", color=0x4FC3F7)
-
-    if not pop_map and not inv_map:
-        embed.description = f"*No district data available right now.*\n\n{_updated_line()}"
-        return embed
-
-    all_districts = sorted(
-        set(pop_map) | set(inv_map),
-        key=lambda d: (
-            d not in inv_map,
-            not inv_map.get(d, {}).get("mega", False),
-            -pop_map.get(d, 0),
-        ),
+    traits = traits or []
+    return sum(
+        _TIER_WEIGHT[trait_tier(t, i)] for i, t in enumerate(traits)
     )
 
-    invasion_lines: list[str] = []
-    district_lines: list[str] = []
 
-    for district in all_districts:
-        pop  = pop_map.get(district, 0)
-        inv  = inv_map.get(district)
-        safe = f" {SAFE_EMOJI}" if district in MEGA_SAFE_DISTRICTS else ""
+# Custom jellybean emoji. Must live in a server the bot is a member of.
+JELLYBEAN_EMOJI = os.getenv(
+    "JELLYBEAN_EMOJI", "<:Jellybeans:1496983830106603551>"
+)
 
-        if inv:
-            cog_type = inv.get("type", "Unknown")
-            progress = inv.get("progress", "?/?")
-            mega_tag = " 🚨 **MEGA**" if inv.get("mega") else ""
-            invasion_lines.append(
-                f"{COG_EMOJI} **{district}**{mega_tag} — {cog_type} `{progress}`"
-            )
-        else:
-            district_lines.append(f"**{district}**{safe} `{pop:,}`")
+# Custom cog emoji — shown next to districts that are being invaded.
+COG_EMOJI = os.getenv("COG_EMOJI", "<:Cog:1496996533432877078>")
 
-    sections: list[str] = []
-    if invasion_lines:
-        sections.append("**⚠️ Active Invasions**\n" + "\n".join(invasion_lines))
+# Custom "safe" shield emoji — shown next to districts that are immune
+# to Mega Invasions (2.0s, Skelecog invasions, etc.).
+SAFE_EMOJI = os.getenv("SAFE_EMOJI", "<:Safe:1497311481711165625>")
 
-    if district_lines:
-        pairs: list[str] = []
-        for i in range(0, len(district_lines), 2):
-            row = district_lines[i]
-            if i + 1 < len(district_lines):
-                row += "  •  " + district_lines[i + 1]
-            pairs.append(row)
-        sections.append(
-            f"**🏙️ Districts — {total:,} Toons Online**\n" + "\n".join(pairs)
-        )
+# Districts immune to Mega Invasions. Compared against a normalized
+# (lowercased, space-stripped) district name so minor spelling / casing
+# variations don't break matching.
+SAFE_FROM_MEGA_INVASIONS: set[str] = {
+    "blamcanyon",
+    "gulpgulch",
+    "whooshrapids",
+    "wooshrapids",  # common misspelling
+    "zapwood",
+    "welcomevalley",
+}
 
-    sections.append(_updated_line())
-    embed.description = "\n\n".join(sections) or "*No data available.*"
-    return embed
+# Districts where only pre-set SpeedChat phrases are available — Toons
+# cannot type custom messages (no SpeedChat+ either).
+SPEEDCHAT_ONLY_DISTRICTS: set[str] = {
+    "boingbury",
+    "gulpgulch",
+    "whooshrapids",
+    "wooshrapids",
+}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Embed 2 — Field Offices
-# ══════════════════════════════════════════════════════════════════════════════
-
-def format_fieldoffices(fieldoffices: dict | None = None) -> discord.Embed:
-    fo_map = _safe_get(fieldoffices, "fieldOffices") or {}
-
-    embed = discord.Embed(title="🏢  Sellbot Field Offices", color=0xE74C3C)
-
-    if not fo_map:
-        embed.description = f"*No Field Offices are currently active.*\n\n{_updated_line()}"
-        return embed
-
-    lines: list[str] = []
-    for zone_id, fo in fo_map.items():
-        if not isinstance(fo, dict):
-            continue
-
-        location = ZONE_NAMES.get(str(zone_id), f"Zone {zone_id}")
-        # difficulty is 0-indexed: 0=★, 1=★★, 2=★★★
-        stars    = "⭐" * min(3, int(fo.get("difficulty", 0)) + 1)
-        annexes  = fo.get("annexes")
-        is_open  = fo.get("open", True)
-        status   = "🟢 Open" if is_open else "🔴 Closed"
-
-        if annexes is None:
-            annex_str = "? annexes remaining"
-        elif int(annexes) <= 0:
-            exp = fo.get("expiring")
-            annex_str = f"Expiring {_ts(exp)}" if exp else "Expiring soon"
-        else:
-            n = int(annexes)
-            annex_str = f"{n} annex{'es' if n != 1 else ''} remaining"
-
-        lines.append(f"**{location}** {stars}\n  {status}  •  {annex_str}")
-
-    body = "\n\n".join(lines) if lines else "*No Field Offices active.*"
-    embed.description = f"{body}\n\n{_updated_line()}"
-    return embed
+def _norm_district(name: str) -> str:
+    """Normalize a district name for set-membership checks."""
+    return (name or "").lower().replace(" ", "").replace("'", "")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Embed 3 — Silly Meter
-# ══════════════════════════════════════════════════════════════════════════════
+def _is_safe_district(name: str) -> bool:
+    return _norm_district(name) in SAFE_FROM_MEGA_INVASIONS
 
-def format_sillymeter(sillymeter: dict | None = None) -> discord.Embed:
-    """
-    Silly Meter embed.  Official API states: Active, Reward, Inactive.
-    Key fields:
-      state                "Active" | "Reward" | "Inactive"
-      hp                   0-5,000,000
-      rewards              [team1, team2, team3]  (name strings)
-      rewardDescriptions   [desc1, desc2, desc3]
-      winner               team name string (only in Reward state)
-      rewardPoints         {team: int} (only in Reward state)
-      nextUpdateTimestamp  epoch of next state change
-    """
-    embed = discord.Embed(color=0x9B59B6)
 
-    if not sillymeter:
-        embed.title       = "🎭  Silly Meter"
-        embed.description = f"*Silly Meter data unavailable right now.*\n\n{_updated_line()}"
-        return embed
+def _is_speedchat_only(name: str) -> bool:
+    return _norm_district(name) in SPEEDCHAT_ONLY_DISTRICTS
 
-    state   = (sillymeter.get("state") or "Inactive").strip()
-    hp      = int(sillymeter.get("hp") or 0)
-    next_ts = sillymeter.get("nextUpdateTimestamp")
+# Tier-named star emojis used in the doodle rating column, one per
+# trait slot. Defaults assume the bot has the matching custom emojis
+# in a server it's a member of.
+STAR_PERFECT = os.getenv(
+    "STAR_PERFECT", "<:RBStar:1497375968619135076>"
+)
+STAR_AMAZING = os.getenv(
+    "STAR_AMAZING", "<:RBStar:1497375968619135076>"
+)
+STAR_GREAT = os.getenv("STAR_GREAT", "<:GoldenStar:1497383695781462016>")
+STAR_GOOD = os.getenv("STAR_GOOD", "<:SilverStar:1497299363590967549>")
+STAR_OK = os.getenv("STAR_OK", "<:BronzeStar:1497300707554889891>")
+STAR_BAD = os.getenv("STAR_BAD", "<:Trash:1497379832865226844>")
 
-    rewards:      list[str] = sillymeter.get("rewards") or []
-    reward_descs: list[str] = sillymeter.get("rewardDescriptions") or []
+# Used for Kaboomberg's "Annexes Remaining" placeholder count and
+# anywhere else we want to render an infinity glyph. Override in .env
+# if you have a custom emoji you'd rather use.
+INFINITE_EMOJI = os.getenv("INFINITE_EMOJI", "♾️")
 
-    # ── Active ────────────────────────────────────────────────────────────────
-    if state == "Active":
-        pct    = max(0, min(100, round(hp / SILLY_MAX_HP * 100)))
-        filled = round(pct / 5)
-        bar    = "█" * filled + "░" * (20 - filled)
-        left   = max(0, SILLY_MAX_HP - hp)
+_TIER_STARS = {
+    "perfect": STAR_PERFECT,
+    "amazing": STAR_AMAZING,
+    "great": STAR_GREAT,
+    "good": STAR_GOOD,
+    "ok": STAR_OK,
+    "bad": STAR_BAD,
+}
 
-        progress = (
-            f"`{bar}` **{pct}%**\n"
-            f"**{hp:,}** / **{SILLY_MAX_HP:,}** Silly Points\n"
-            f"**{left:,}** points to go!"
-            + (f"\n*Next update: {_ts(next_ts)}*" if next_ts else "")
-        )
+# Friendly tier label printed as the leading bracket box on each
+# doodle row and used in the guide.
+PRIORITY_LABELS: dict[int, str] = {
+    PRIORITY_PERFECT: "Perfect",
+    PRIORITY_AMAZING: "Amazing",
+    PRIORITY_GREAT: "Great",
+    PRIORITY_GREAT_GOOD: "Good",
+    PRIORITY_GREAT_GOOD_OK: "OK",
+    PRIORITY_REST: "Bad",
+}
 
-        embed.title       = "🎭  Silly Meter — Filling Up!"
-        embed.description = f"{progress}\n\n{_updated_line()}"
 
-        if rewards:
-            team_lines: list[str] = []
-            for i, name in enumerate(rewards):
-                desc = (reward_descs[i] if i < len(reward_descs) else "") or _fallback_desc(name)
-                team_lines.append(f"**{name}**" + (f"\n*{desc}*" if desc else ""))
-            embed.add_field(
-                name="🏁  Competing Teams",
-                value="\n\n".join(team_lines),
-                inline=False,
-            )
+def star_for(trait: str, slot: int) -> str:
+    return _TIER_STARS[trait_tier(trait, slot)]
 
-    # ── Reward ────────────────────────────────────────────────────────────────
-    elif state == "Reward":
-        winner     = sillymeter.get("winner") or "Unknown"
-        win_desc   = _fallback_desc(winner)
-        reward_pts = sillymeter.get("rewardPoints") or {}
+# Zone ID -> street name, from the Field Offices API docs.
+ZONE_NAMES: dict[int, str] = {
+    3100: "Walrus Way",
+    3200: "Sleet Street",
+    3300: "Polar Place",
+    4100: "Alto Avenue",
+    4200: "Baritone Boulevard",
+    4300: "Tenor Terrace",
+    5100: "Elm Street",
+    5200: "Maple Street",
+    5300: "Oak Street",
+    9100: "Lullaby Lane",
+    9200: "Pajama Place",
+}
 
-        body = (
-            "The Silly Meter reached **{:,}** Silly Points and the whole town "
-            "went absolutely *bananas!* 🎊\n\n"
-            "**Winner: {}**{}\n{}"
-        ).format(
-            SILLY_MAX_HP,
-            winner,
-            f"\n*{win_desc}*" if win_desc else "",
-            f"\n*Rewards end: {_ts(next_ts)}*" if next_ts else "",
-        )
+# Department letter -> name.
+DEPARTMENTS = {
+    "s": "Sellbot",
+    "c": "Cashbot",
+    "l": "Lawbot",
+    "b": "Bossbot",
+    "m": "Cashbot",  # some docs use 'm' for Cashbot historically
+}
 
-        embed.title       = "🎉  Silly Meter — Rewards Active!"
-        embed.description = f"{body}\n\n{_updated_line()}"
+TTR_COLOR = 0x26A2EC  # TTR-ish blue
 
-        if reward_pts:
-            pts_lines = [
-                f"{'👑 ' if t == winner else ''}**{t}** — {p:,} points"
-                for t, p in sorted(reward_pts.items(), key=lambda kv: kv[1], reverse=True)
-            ]
-            embed.add_field(name="📊  Team Scores", value="\n".join(pts_lines), inline=False)
 
-    # ── Inactive ──────────────────────────────────────────────────────────────
+def _ts(epoch: int | float | None) -> str:
+    if not epoch:
+        return "unknown"
+    # Discord relative timestamp, e.g. "12 seconds ago"
+    return f"<t:{int(epoch)}:R>"
+
+
+def _footer(embed: discord.Embed, last_updated: int | float | None) -> None:
+    ts = datetime.now(timezone.utc)
+    extra = f" • TTR last refreshed {_ts(last_updated)}" if last_updated else ""
+    embed.set_footer(text=f"Updated {ts.strftime('%Y-%m-%d %H:%M UTC')}" + extra)
+
+
+def _error(title: str, message: str) -> discord.Embed:
+    e = discord.Embed(
+        title=title,
+        description=f":warning: {message}",
+        color=0xE74C3C,
+    )
+    _footer(e, None)
+    return e
+
+
+# --------------------------------------------------------------------- invasions
+
+
+def format_invasions(data: dict[str, Any] | None) -> discord.Embed:
+    if not data:
+        return _error("Invasions", "Could not reach the TTR Invasions API.")
+    if data.get("error"):
+        return _error("Invasions", str(data["error"]))
+
+    invasions = data.get("invasions", {}) or {}
+    embed = discord.Embed(
+        title=":rotating_light: Current Cog Invasions",
+        color=TTR_COLOR,
+    )
+
+    if not invasions:
+        embed.description = "No active invasions right now. :tada:"
     else:
-        body = (
-            "The Silly Meter hit its peak and the whole town went absolutely "
-            "*bananas!* 🎉\n\n"
-            "The meter needs a moment to cool off from all that toontastic "
-            "activity. Once it settles down a brand new round of silliness begins!"
-            + (f"\n\n*Meter returns: {_ts(next_ts)}*" if next_ts else "")
-        )
-        embed.title       = "❄️  Silly Meter — Cooling Down"
-        embed.description = f"{body}\n\n{_updated_line()}"
+        # Sort by district name for stable ordering.
+        lines = []
+        for district, inv in sorted(invasions.items()):
+            cog = inv.get("type", "Unknown")
+            progress = inv.get("progress", "?/?")
+            as_of = inv.get("asOf")
+            lines.append(
+                f"**{district}** — {cog}  `{progress}`  ({_ts(as_of)})"
+            )
+        # Discord description cap is 4096. Trim defensively.
+        embed.description = "\n".join(lines)[:4000]
 
-        if rewards:
-            team_lines_: list[str] = []
-            for i, name in enumerate(rewards):
-                desc = (reward_descs[i] if i < len(reward_descs) else "") or _fallback_desc(name)
-                team_lines_.append(f"**{name}**" + (f"\n*{desc}*" if desc else ""))
-            embed.add_field(
-                name="🔜  Next Round — Sneak Peek",
-                value="\n\n".join(team_lines_),
+    _footer(embed, data.get("lastUpdated"))
+    return embed
+
+
+# -------------------------------------------------------------------- population
+
+
+def format_population(data: dict[str, Any] | None) -> discord.Embed:
+    if not data:
+        return _error("Population", "Could not reach the TTR Population API.")
+    if data.get("error"):
+        return _error("Population", str(data["error"]))
+
+    total = data.get("totalPopulation", 0)
+    pop_by = data.get("populationByDistrict", {}) or {}
+    status_by = data.get("statusByDistrict", {}) or {}
+
+    embed = discord.Embed(
+        title=":busts_in_silhouette: Toontown Population",
+        description=f"**Total Toons online:** {total:,}",
+        color=TTR_COLOR,
+    )
+
+    status_icon = {
+        "online": ":green_circle:",
+        "offline": ":black_circle:",
+        "draining": ":yellow_circle:",
+        "closed": ":red_circle:",
+    }
+
+    # Sorted alphabetically by district name.
+    rows = sorted(pop_by.items(), key=lambda kv: kv[0].lower())
+    lines = []
+    for district, pop in rows:
+        status = status_by.get(district, "unknown")
+        icon = status_icon.get(status, ":white_circle:")
+        lines.append(f"{icon} **{district}** — {pop:,} toons ({status})")
+
+    if lines:
+        embed.add_field(
+            name="Districts",
+            value="\n".join(lines)[:1024],
+            inline=False,
+        )
+
+    _footer(embed, data.get("lastUpdated"))
+    return embed
+
+
+# ----------------------------------------------------------------- field offices
+
+
+def format_field_offices(data: dict[str, Any] | None) -> discord.Embed:
+    if not data:
+        return _error(
+            "Field Offices", "Could not reach the TTR Field Offices API."
+        )
+
+    offices = data.get("fieldOffices", {}) or {}
+    embed = discord.Embed(
+        title=":office: Active Field Offices",
+        color=TTR_COLOR,
+    )
+
+    if not offices:
+        embed.description = "No Field Offices are currently active."
+    else:
+        # Sort by difficulty (stars) descending, then by zone id as a
+        # stable tiebreaker so ordering is deterministic.
+        def _sort_key(item: tuple[str, dict]) -> tuple[int, int]:
+            zone_str, fo = item
+            try:
+                zone_id = int(zone_str)
+            except (TypeError, ValueError):
+                zone_id = 0
+            return (-int(fo.get("difficulty", 0)), zone_id)
+
+        lines = []
+        for zone_str, fo in sorted(offices.items(), key=_sort_key):
+            try:
+                zone_id = int(zone_str)
+            except (TypeError, ValueError):
+                zone_id = 0
+            street = ZONE_NAMES.get(zone_id, f"Zone {zone_str}")
+            dept = DEPARTMENTS.get((fo.get("department") or "").lower(), "?")
+            difficulty = int(fo.get("difficulty", 0)) + 1  # zero-indexed
+            stars = ":star:" * difficulty
+            annexes = fo.get("annexes", "?")
+            open_state = ":unlock:" if fo.get("open") else ":lock:"
+            expiring = fo.get("expiring")
+            expiring_str = f" • closing {_ts(expiring)}" if expiring else ""
+            lines.append(
+                f"{open_state} **{street}** — {dept} {stars}  "
+                f"(annexes left: {annexes}){expiring_str}"
+            )
+        embed.description = "\n".join(lines)[:4000]
+
+    _footer(embed, data.get("lastUpdated"))
+    return embed
+
+
+# ---------------------------------------------------------------------- doodles
+
+
+def _b(text: str) -> str:
+    """Bold: wraps content in **…**."""
+    return f"**{text}**"
+
+
+def _bi(text: str) -> str:
+    """Bold + italic, using the **_X_** form to dodge the ***…*** /
+    **…** boundary-ambiguity that Discord sometimes mis-parses when
+    two adjacent bracket groups butt up against each other."""
+    return f"**_{text}_**"
+
+
+def _doodle_line(
+    district: str, playground: str, traits: list[str], cost: Any
+) -> str:
+    """Render one doodle row:
+
+    **[Tier]** **[<stars>]** **_[trait, ...]_** **[District · Playground jb cost jb]**
+
+    Each bracket group is individually bolded (so the brackets
+    themselves render heavy); the trait list is bold + italic. A real
+    space separator goes between bracket groups so the line has room
+    to breathe and Discord's markdown parser doesn't choke on adjacent
+    `**` runs.
+    """
+    traits = traits or []
+    label = PRIORITY_LABELS[doodle_priority(traits)]
+    location_box = (
+        f"[{district} · {playground} "
+        f"{JELLYBEAN_EMOJI} {cost} {JELLYBEAN_EMOJI}]"
+    )
+    if traits:
+        stars = "".join(star_for(t, i) for i, t in enumerate(traits[:4]))
+        trait_str = ", ".join(traits)
+        return (
+            f"{_b(f'[{label}]')} "
+            f"{_b(f'[{stars}]')} "
+            f"{_bi(f'[{trait_str}]')} "
+            f"{_b(location_box)}"
+        )
+    return (
+        f"{_b(f'[{label}]')} "
+        f"{_bi('[traits not listed]')} "
+        f"{_b(location_box)}"
+    )
+
+
+def _doodle_guide_embed() -> discord.Embed:
+    """Embed #1: explanation of the star-rating system.
+
+    Spells out the star → tier mapping at the top, then the tiering
+    rubric (what trait combination makes a doodle Perfect / Amazing /
+    Great / etc.). Each block is separated by a blank line so the
+    embed has room to breathe and matches the spacing used in the
+    data embeds below.
+    """
+    embed = discord.Embed(
+        title=":dog: Doodle Trait Guide",
+        color=TTR_COLOR,
+    )
+
+    # Star -> trait-quality legend (each tier: bold-italic description,
+    # blank line, then italic trait list).
+    legend = "\n\n".join(
+        [
+            (
+                f"{STAR_PERFECT} {_b('[Rarely Tired]')} -- "
+                "***Rarely Tired in the first slot offers the strongest "
+                "benefit and is noted on Perfect Doodles. When Rarely Tired "
+                "is in any other slot it still offers amazing benefit, keeping "
+                "your doodle from tiring in battle and giving more trick uses "
+                "before it gets tired.***\n\u200b\n"
+                "*Rarely Tired*"
+            ),
+            (
+                f"{STAR_GREAT} {_b('[Great]')} -- "
+                "***Talents that offer strong positive benefits to your doodle, "
+                "but not as strong as Rarely Tired.***\n\u200b\n"
+                "*Always Affectionate, Always Playful, Rarely Bored, "
+                "Rarely Confused, Rarely Forgets, Rarely Grumpy, "
+                "Rarely Hungry, Rarely Lonely, Rarely Restless, Rarely Sad*"
+            ),
+            (
+                f"{STAR_GOOD} {_b('[Good]')} -- "
+                "***Decent talents that just aren't as strong as Great.***\n\u200b\n"
+                "*Often Affectionate, Often Playful, Pretty Calm, Pretty Excitable*"
+            ),
+            (
+                f"{STAR_OK} {_b('[OK]')} -- "
+                "***Not good talents, but could be worse.***\n\u200b\n"
+                "*Rarely Affectionate, Rarely Playful, Sometimes Affectionate, "
+                "Sometimes Bored, Sometimes Confused, Sometimes Forgets, "
+                "Sometimes Grumpy, Sometimes Hungry, Sometimes Lonely, "
+                "Sometimes Playful, Sometimes Restless, Sometimes Sad, "
+                "Sometimes Tired*"
+            ),
+            (
+                f"{STAR_BAD} {_b('[Bad]')} -- "
+                "***These are just bad traits for a doodle to have.***\n\u200b\n"
+                "*Always Bored, Always Confused, Always Forgets, Always Grumpy, "
+                "Always Hungry, Always Lonely, Always Restless, Always Sad, "
+                "Always Tired, Often Bored, Often Confused, Often Forgets, "
+                "Often Grumpy, Often Hungry, Often Lonely, Often Restless, "
+                "Often Sad, Often Tired*"
+            ),
+        ]
+    )
+
+    # Tiering list rubric — exactly what the thresholds require.
+    tiering = "\n\n".join(
+        [
+            _b("Tiering List"),
+            (
+                f"{_b('[Perfect]')} "
+                "*Rarely Tired (first slot), Great Talent, Great Talent, Great Talent*"
+            ),
+            (
+                f"{_b('[Amazing]')} "
+                "*Great Talent, Great Talent, Great Talent, Rarely Tired "
+                "(any combination with 3 Great Talents + Rarely Tired)*"
+            ),
+            (
+                f"{_b('[Great]')} "
+                "*Great Talent, Great Talent, Great Talent, Great Talent "
+                "(4 Great Talents — no Rarely Tired)*"
+            ),
+            (
+                f"{_b('[Good]')} "
+                "*Great Talent, Great Talent, Great Talent, Good Talent "
+                "(3 Great + 1 Good)*"
+            ),
+            (
+                f"{_b('[OK]')} "
+                "*Great Talent, Great Talent, Good Talent, Good Talent "
+                "(2 Great + 2 Good)*"
+            ),
+            (
+                f"{_b('[Bad]')} "
+                "*Any doodle with fewer than 2 Great Talents, any doodle "
+                "containing Bad or OK Talents, or any doodle below the OK "
+                "threshold — **Bad doodles are not listed.**"
+                "*"
+            ),
+        ]
+    )
+
+    embed.description = legend + "\n\n" + tiering
+    return embed
+
+
+_DATA_EMBED_TITLES = (
+    ":dog: Best Doodles",
+    ":dog: Great Doodles",
+    ":dog: Good Doodles",
+)
+
+_EMPTY_DATA_MSGS = (
+    "*No qualifying doodles right now. Check the next embed!*",
+    "*Everything fit above — nothing more to show here.*",
+    "*All remaining doodles fit above.*",
+)
+
+
+def format_doodles(data: dict[str, Any] | None) -> list[discord.Embed]:
+    """Return 1 guide embed + 3 data embeds for the #ttr-doodles channel.
+
+    Doodles are sorted by strict priority:
+
+        PERFECT        ({rainbow} + 3{gold})     →
+        AMAZING        ({crystal} + 3{gold})     →
+        GREAT          (4{gold})                 →
+        GREAT_GOOD     ({gold}/{half} mix)       →
+        GREAT_GOOD_OK  (+{silver} mix)           →
+        REST           (any {bronze} / anything else)
+
+    Within a priority bucket, higher total trait-quality prints first
+    (e.g. 3 Gold + 1 Half beats 2 Gold + 2 Half). District / playground
+    name is the final alphabetical tiebreaker.
+
+    Then **flow-fill** across three data embeds: each doodle goes in the
+    highest-numbered embed that still has room in its description. We
+    never start a lower-priority doodle until every higher-priority
+    doodle has been placed, exactly as specified.
+
+    If the third data embed fills up and doodles are still pending, we
+    append a field pointing users to ToonHQ's tracker.
+    """
+    guide = _doodle_guide_embed()
+
+    if data is None:
+        err = _error("Doodles", "Could not reach the TTR Doodles API.")
+        return [guide, err]
+
+    # Flatten the nested structure.
+    rows: list[tuple[str, str, list[str], Any]] = []
+    for district, playgrounds in (data or {}).items():
+        if not isinstance(playgrounds, dict):
+            continue
+        for playground, doodles in playgrounds.items():
+            if not isinstance(doodles, list):
+                continue
+            for d in doodles:
+                traits = d.get("traits") or []
+                rows.append(
+                    (district, playground, traits, d.get("cost", "?"))
+                )
+
+    # Drop Bad-tier doodles — only show Perfect through OK.
+    rows = [r for r in rows if doodle_priority(r[2]) != PRIORITY_REST]
+
+    # Strict priority sort, then higher-quality first, then alphabetical.
+    rows.sort(key=lambda r: (
+        doodle_priority(r[2]),
+        -doodle_quality(r[2]),
+        r[0].lower(),
+        r[1].lower(),
+    ))
+
+    # Flow-fill three embed descriptions. Discord's description cap is
+    # 4096; we leave some headroom for safety.
+    MAX_DESC = 3900
+    embed_lines: list[list[str]] = [[], [], []]
+    embed_used = [0, 0, 0]
+    cur = 0
+    leftover = 0
+    # We separate doodles with a blank line (\n\n) for breathing room,
+    # so each extra line costs len(line) + 2 characters.
+    for idx, (district, playground, traits, cost) in enumerate(rows):
+        line = _doodle_line(district, playground, traits, cost)
+        # First line in an embed doesn't need the leading blank line;
+        # subsequent ones in the same embed pay for one.
+        line_len = len(line) + (2 if embed_lines[cur] else 0)
+        # Walk forward until we find an embed with room for this line.
+        while cur < 3 and embed_used[cur] + line_len > MAX_DESC:
+            cur += 1
+            # Recompute: if we jumped to an empty embed, no leading gap.
+            line_len = len(line) + (
+                2 if cur < 3 and embed_lines[cur] else 0
+            )
+        if cur >= 3:
+            leftover = len(rows) - idx
+            break
+        embed_lines[cur].append(line)
+        embed_used[cur] += line_len
+
+    result = [guide]
+    for i in range(3):
+        e = discord.Embed(title=_DATA_EMBED_TITLES[i], color=TTR_COLOR)
+        if embed_lines[i]:
+            # Blank line between doodle rows for readability.
+            e.description = "\n\n".join(embed_lines[i])
+        else:
+            e.description = _EMPTY_DATA_MSGS[i]
+        if i == 2 and leftover:
+            e.add_field(
+                name="Need more doodles?",
+                value=(
+                    f"*{leftover} more doodle"
+                    f"{'s' if leftover != 1 else ''} couldn't fit. "
+                    "For a complete, searchable list of every doodle "
+                    "currently in every pet shop, visit "
+                    "[ToonHQ's doodle tracker]"
+                    "(https://toonhq.org/doodles/).*"
+                ),
                 inline=False,
             )
+        result.append(e)
+    return result
+
+
+# ---------------------------------------------------- combined information
+
+
+# TTR's API returns some cog type names mashed into one word. Override
+# those to the display spelling players actually use.
+COG_NAME_OVERRIDES: dict[str, str] = {
+    "Telemarketer": "Tele-Marketer",
+}
+
+
+def _fmt_cog_type(raw: str) -> str:
+    """Pretty-print a TTR cog type name, patching known oddities."""
+    if not raw:
+        return "Unknown"
+    return COG_NAME_OVERRIDES.get(raw, raw)
+
+
+def _district_status_icon(status: str) -> str:
+    """Icon for a district whose population line is otherwise unadorned."""
+    s = (status or "").lower()
+    if s in {"offline"}:
+        return ":red_circle:"
+    if s in {"maintenance", "closed", "draining"}:
+        # "closed" / "draining" are TTR statuses that effectively mean
+        # the district is going down for re-tooning; show the wrench.
+        return ":wrench:"
+    return ":green_circle:"
+
+
+def _district_unavailable(status: str) -> bool:
+    """True if the district should render as 'Down for Re-Tooning'."""
+    return (status or "").lower() in {
+        "offline", "maintenance", "closed", "draining",
+    }
+
+
+def format_information(
+    *,
+    invasions: dict[str, Any] | None,
+    population: dict[str, Any] | None,
+    fieldoffices: dict[str, Any] | None,
+) -> discord.Embed:
+    """One combined embed for the #ttr-information channel.
+
+    Districts come from the population API, with invasion info merged in.
+    Field Offices come from the field-offices API (sorted ★★★ → ★).
+    """
+    pop_by = (population or {}).get("populationByDistrict", {}) or {}
+    status_by = (population or {}).get("statusByDistrict", {}) or {}
+    active_invasions = (invasions or {}).get("invasions", {}) or {}
+    total_pop = (population or {}).get("totalPopulation")
+
+    # Title carries the total toons online (e.g. "ToonTown Information
+    # [ 1,234 Toons Online ]"). If the population API is down, we just
+    # show the bare title.
+    if isinstance(total_pop, int):
+        title = f"ToonTown Information [ {total_pop:,} Toons Online ]"
+    else:
+        title = "ToonTown Information"
+    embed = discord.Embed(title=title, color=TTR_COLOR)
+
+    parts: list[str] = []
+
+    # --- Districts (population + invasions combined) --------------
+
+    if pop_by:
+        # Each district now renders as a 2-line block with a blank line
+        # between blocks, so build the body as a list of multi-line
+        # strings and join them with "\n\n" at the end.
+        district_blocks: list[str] = []
+        for district in sorted(pop_by.keys(), key=str.lower):
+            pop = pop_by[district]
+            status = status_by.get(district, "unknown")
+            inv = active_invasions.get(district)
+            unavailable = _district_unavailable(status)
+
+            # --- unavailable districts get a compact "down" layout ---
+            if unavailable:
+                icon = _district_status_icon(status)
+                line1 = " ".join([
+                    _b(f"[{icon}]"),
+                    _b(f"[{district}]"),
+                    _b("[Unavailable]"),
+                ])
+                line2 = _b("[This District is Down for Re-Tooning]")
+                district_blocks.append(f"{line1}\n{line2}")
+                continue
+
+            # --- active districts: invasion > plain status ---
+            # Line 1: [icon] [District] [N Online]
+            icon = COG_EMOJI if inv else ":green_circle:"
+            line1 = " ".join([
+                _b(f"[{icon}]"),
+                _b(f"[{district}]"),
+                _b(f"[{pop} Online]"),
+            ])
+
+            # Line 2: [Invasion] [:Safe:] [SpeedChat Only]
+            #         (only the boxes that apply; skip line 2 if all empty)
+            line2_parts: list[str] = []
+            if inv:
+                cog_type = _fmt_cog_type(inv.get("type") or "")
+                progress = inv.get("progress", "?/?")
+                line2_parts.append(_bi(f"[{cog_type} {progress}]"))
+            if _is_safe_district(district):
+                line2_parts.append(_b(f"[{SAFE_EMOJI}]"))
+            if _is_speedchat_only(district):
+                line2_parts.append(_b("[SpeedChat Only]"))
+
+            if line2_parts:
+                district_blocks.append(f"{line1}\n{' '.join(line2_parts)}")
+            else:
+                district_blocks.append(line1)
+
+        body = "\n\n".join(district_blocks)
+
+        # Legend — always show every icon so players have a reference
+        # even when no district is currently in that state. Order
+        # (top → bottom): Safe → SpeedChat Only → green → red → wrench,
+        # with a blank line between each entry for breathing room.
+        legend_entries = [
+            f"{SAFE_EMOJI} *Immune to Mega Invasions (event-wide "
+            "invasions like 2.0s and Skelecogs that sweep across "
+            "most districts at once).*",
+            "**SpeedChat Only** *— you cannot use SpeedChat+ in these "
+            "districts. Only the phrases from the SpeedChat menu are "
+            "available.*",
+            "[:green_circle:] *— District is active.*",
+            "[:red_circle:] *— District is offline.*",
+            "[:wrench:] *— This District is undergoing Re-Tooning by "
+            "the Toon Council and will return soon.*",
+        ]
+        legend = "\n\n".join(legend_entries)
+
+        parts.append("**Districts**\n\n" + body + "\n\n" + legend)
+    else:
+        parts.append("**Districts**\n*Population data unavailable.*")
+
+    # --- Field Offices -------------------------------------------
+    #
+    # Each office renders as a 2-line block with a blank line between
+    # blocks. Kaboomberg is a hidden 4-star field office only available
+    # via a special quest; we always pin it to the top of the list.
+    offices = (fieldoffices or {}).get("fieldOffices", {}) or {}
+
+    fo_blocks: list[str] = []
+
+    # Always-on Kaboomberg block (hidden quest field office). 4 RBStars
+    # and an infinite-annex placeholder.
+    kaboomberg_line1 = " ".join([
+        _b("[:unlock:]"),
+        _b(f"[{STAR_PERFECT * 4}]"),
+        _b("[Kaboomberg]"),
+    ])
+    kaboomberg_line2 = _b(f"[{INFINITE_EMOJI} Annexes Remaining]")
+    fo_blocks.append(f"{kaboomberg_line1}\n{kaboomberg_line2}")
+
+    if offices:
+        def _sort_key(item: tuple[str, dict]) -> tuple[int, int]:
+            zone_str, fo = item
+            try:
+                zone_id = int(zone_str)
+            except (TypeError, ValueError):
+                zone_id = 0
+            return (-int(fo.get("difficulty", 0)), zone_id)
+
+        for zone_str, fo in sorted(offices.items(), key=_sort_key):
+            try:
+                zone_id = int(zone_str)
+            except (TypeError, ValueError):
+                zone_id = 0
+            street = ZONE_NAMES.get(zone_id, f"Zone {zone_str}")
+            difficulty = int(fo.get("difficulty", 0)) + 1  # zero-indexed
+            # GoldenStar emoji per spec — replaces the default :star:.
+            stars = STAR_GREAT * difficulty
+            annexes = fo.get("annexes", "?")
+            is_full = not fo.get("open")
+            open_state = ":lock:" if is_full else ":unlock:"
+
+            # Line 1: [emoji] [stars] [street]
+            line1 = " ".join([
+                _b(f"[{open_state}]"),
+                _b(f"[{stars}]"),
+                _b(f"[{street}]"),
+            ])
+            # Line 2: [N Annexes Remaining] [FULL?]
+            line2_parts = [_b(f"[{annexes} Annexes Remaining]")]
+            if is_full:
+                line2_parts.append(_b("[FULL]"))
+            fo_blocks.append(f"{line1}\n{' '.join(line2_parts)}")
+
+    parts.append("**Field Offices**\n\n" + "\n\n".join(fo_blocks))
+
+    # --- Last updated (live relative timestamp) ------------------
+    # Discord renders <t:EPOCH:R> as a live-updating "x seconds ago"
+    # label that ticks forward without us having to edit the message.
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    parts.append(f"***Last updated: <t:{now_epoch}:R>***")
+
+    description = "\n\n".join(parts)
+    if len(description) > 4000:
+        description = description[:3997] + "…"
+    embed.description = description
 
     return embed
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Doodles
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _score_traits(traits: list[str]) -> tuple[str, str]:
-    if not traits:
-        return STAR_BAD, "Skip"
-    if traits[0] == "Rarely Tired":
-        return STAR_PERFECT, "Perfect"
-    total = sum(_TRAIT_RANK.get(t, 6) for t in traits)
-    avg   = total / len(traits)
-    for threshold, star, label in [
-        (0, STAR_PERFECT, "Perfect"),
-        (1, STAR_AMAZING, "Amazing"),
-        (3, STAR_GREAT,   "Great"),
-        (5, STAR_GOOD,    "Good"),
-        (7, STAR_OK,      "OK"),
-    ]:
-        if avg <= threshold:
-            return star, label
-    return STAR_BAD, "Skip"
 
 
-def format_doodles(doodles: dict | None = None) -> list[discord.Embed]:
+# ---------------------------------------------------------------------- sillymeter
+
+# Keyword -> (wiki display name, emoji, short description)
+# Keys are lowercase substrings checked against the API team name.
+_TEAM_INFO: dict[str, tuple[str, str, str]] = {
+    "sound":     (
+        "Double Sound Experience", ":mega:",
+        "Toons earn twice the amount of skill points for Sound gags "
+        "from defeating Cogs.",
+    ),
+    "squirt":    (
+        "Double Squirt Experience", ":droplet:",
+        "Toons earn twice the amount of skill points for Squirt gags "
+        "from defeating Cogs.",
+    ),
+    "throw":     (
+        "Double Throw Experience", ":pie:",
+        "Toons earn twice the amount of skill points for Throw gags "
+        "from defeating Cogs.",
+    ),
+    "drop":      (
+        "Double Drop Experience", ":rock:",
+        "Toons earn twice the amount of skill points for Drop gags "
+        "from defeating Cogs.",
+    ),
+    "toon-up":   (
+        "Double Toon-Up Experience", ":sparkling_heart:",
+        "Toons earn twice the amount of skill points for Toon-Up gags "
+        "from defeating Cogs.",
+    ),
+    "toonup":    (
+        "Double Toon-Up Experience", ":sparkling_heart:",
+        "Toons earn twice the amount of skill points for Toon-Up gags "
+        "from defeating Cogs.",
+    ),
+    "trap":      (
+        "Double Trap Experience", ":mouse_trap:",
+        "Toons earn twice the amount of skill points for Trap gags "
+        "from defeating Cogs.",
+    ),
+    "lure":      (
+        "Double Lure Experience", ":fishing_pole_and_fish:",
+        "Toons earn twice the amount of skill points for Lure gags "
+        "from defeating Cogs.",
+    ),
+    "garden":    (
+        "Speedy Garden Growth", ":seedling:",
+        "Toons' gardens grow every six hours at 12:00 AM, 6:00 AM, "
+        "12:00 PM, and 6:00 PM Pacific Time. Gardens do not deplete water.",
+    ),
+    "laff":      (
+        "Overjoyed Laff Meters", ":heart:",
+        "Toons receive +8 laff points to their maximum laff. "
+        "The maximum laff of 140 is temporarily raised to 148.",
+    ),
+    "fish":      (
+        "Teeming Fish Waters", ":fish:",
+        "Extra fishing docks are available, fish have bigger shadows, "
+        "and an extra fish appears in all ponds.",
+    ),
+    "jellybean": (
+        "Double Jellybeans", ":jar:",
+        "Jellybeans awarded from activities, including unites, are doubled.",
+    ),
+    "jelly":     (
+        "Double Jellybeans", ":jar:",
+        "Jellybeans awarded from activities, including unites, are doubled.",
+    ),
+    "racing":    (
+        "Double Racing Tickets", ":racing_car:",
+        "Toons receive twice the amount of tickets from all race tracks "
+        "in Goofy Speedway, with the exception of Grand Prix.",
+    ),
+    "teleport":  (
+        "Global Teleport Access", ":globe_with_meridians:",
+        "Toons automatically gain temporary teleport access to any area "
+        "across Toontown that they have already visited.",
+    ),
+    "global":    (
+        "Global Teleport Access", ":globe_with_meridians:",
+        "Toons automatically gain temporary teleport access to any area "
+        "across Toontown that they have already visited.",
+    ),
+    "doodle":    (
+        "Doodle Trick Boost", ":dog:",
+        "Toons' doodles perform tricks more frequently and earn more "
+        "experience from each trick they perform.",
+    ),
+}
+
+
+def _team_info(api_name: str) -> tuple[str, str, str]:
+    """Return (wiki name, emoji, description) for a team API name."""
+    lower = api_name.lower()
+    for keyword, info in _TEAM_INFO.items():
+        if keyword in lower:
+            return info
+    return (api_name, ":star:", "")
+
+
+# Total Global Silly Points required to fill the meter each cycle.
+_SILLYMETER_TOTAL = 5_000_000
+
+
+def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
+    """Embed for the #tt-information channel showing Silly Meter status.
+
+    Actual API fields (confirmed from live response):
+      state             -- "Active" while meter is filling; changes when won
+      rewards           -- list[str]  team names (parallel with descriptions)
+      rewardDescriptions-- list[str]  short descriptions from TTR
+      rewardPoints      -- list       usually [None, None, None]
+      winner            -- str | None team name when a winner is active
+      winnerId          -- int        0 while no winner
+      hp                -- int        accumulated points so far (total goal = 5,000,000)
+      asOf              -- int        unix timestamp of this snapshot
+      nextUpdateTimestamp -- int      when meter next ticks
     """
-    Doodle listing embeds, one per playground.
+    embed = discord.Embed(title=":circus_tent: Silly Meter", color=TTR_COLOR)
 
-    API structure:  {district: {playground: [{dna, traits, cost}]}}
-    Price field is 'cost' (not 'price').
-    Each embed is hard-capped to _DESC_LIMIT chars to stay under Discord's
-    6000-char total embed size limit.
-    """
-    updated = _updated_line()
+    if data is None:
+        embed.description = ":warning: Could not reach the TTR Silly Meter API."
+        _footer(embed, None)
+        return embed
 
-    # Flatten {district → {playground → [doodle]}} → {playground → [doodle]}
-    by_pg: dict[str, list[dict]] = {}
-    if isinstance(doodles, dict):
-        for _district, playgrounds in doodles.items():
-            if not isinstance(playgrounds, dict):
-                continue
-            for pg_name, doodle_list in playgrounds.items():
-                if not isinstance(doodle_list, list):
-                    continue
-                by_pg.setdefault(pg_name, []).extend(doodle_list)
+    state   = (data.get("state") or "").strip()
+    winner  = (data.get("winner") or "").strip()
+    rewards = data.get("rewards") or []
+    descs   = data.get("rewardDescriptions") or []
+    hp      = data.get("hp")
+    as_of   = data.get("asOf")
 
-    if not by_pg:
-        embed = discord.Embed(
-            title="🐾  Doodles",
-            description=f"*No doodles are currently for sale.*\n\n{updated}",
-            color=0xFF6B6B,
-        )
-        return [embed]
+    if not isinstance(rewards, list):
+        rewards = []
+    if not isinstance(descs, list):
+        descs = []
 
-    embeds: list[discord.Embed] = []
-    for pg_name, pg_doodles in by_pg.items():
-        emoji = _PLAYGROUND_EMOJI.get(pg_name, "🐾")
-        embed = discord.Embed(
-            title=f"{emoji}  {pg_name} — Doodles for Sale",
-            color=0xFF6B6B,
-        )
+    # ---- REWARDING: a winning team is active ----------------------------
+    if winner:
+        wiki_name, emoji, wiki_desc = _team_info(winner)
+        body = f":white_check_mark: {emoji} **{wiki_name}** is active!"
+        if wiki_desc:
+            body += f"\n\n***{wiki_desc}***"
+        body += "\n\n*The Silly Meter has been filled. Enjoy the rewards while they last!*"
+        embed.description = body
 
-        # Build each doodle's text entry
-        entries: list[str] = []
-        for d in pg_doodles:
-            name   = d.get("name", "Unknown Doodle")
-            traits = d.get("traits") or []
-            cost   = d.get("cost")          # "cost" is the correct API field
-            color  = d.get("color", "")
+    # ---- ACTIVE: meter is filling up ------------------------------------
+    else:
+        desc_line = "**The Silly Meter is filling up...**"
+        if hp is not None:
+            try:
+                accumulated = int(hp)
+                remaining   = max(0, _SILLYMETER_TOTAL - accumulated)
+                pct         = min(100, accumulated / _SILLYMETER_TOTAL * 100)
+                desc_line  += (
+                    f"\n***{remaining:,} Global Silly Points to go!***"
+                    f"\n\u200b\n{accumulated:,} / {_SILLYMETER_TOTAL:,} ({pct:.0f}%)"
+                )
+            except (TypeError, ValueError):
+                pass
+        embed.description = desc_line
 
-            star, label = _score_traits(traits)
-            trait_str   = "  •  ".join(traits) if traits else "No traits listed"
-            cost_str    = f"{JELLYBEAN} {cost:,}" if isinstance(cost, int) else ""
-            color_part  = f"*{color}*  " if color else ""
+        if rewards:
+            team_blocks: list[str] = []
+            for i, api_name in enumerate(rewards):
+                api_name = api_name.strip()
+                wiki_name, emoji, wiki_desc = _team_info(api_name)
+                # Prefer wiki description; fall back to API's own description
+                display_desc = wiki_desc or (descs[i] if i < len(descs) else "")
+                block = f"{emoji} **{wiki_name}**"
+                if display_desc:
+                    block += f"\n***{display_desc}***"
+                team_blocks.append(block)
+            if team_blocks:
+                embed.add_field(
+                    name="Competing Teams",
+                    value="\n\u200b\n".join(team_blocks),
+                    inline=False,
+                )
 
-            entries.append(
-                f"{star} **{name}** `[{label}]`\n"
-                f"  {color_part}{trait_str}"
-                + (f"\n  {cost_str}" if cost_str else "")
-            )
+    _footer(embed, as_of)
+    return embed
 
-        # Fit as many entries as possible within the description limit,
-        # reserving space for the updated line
-        reserved    = len(updated) + 4   # "\n\n" + updated line
-        body, omitted = _truncate_desc(entries, "\n\n", limit=_DESC_LIMIT - reserved)
+# --------------------------------------------------------------- public mapping
+#
+# Each formatter takes the full api_data dict (keyed by API name) and
+# returns a discord.Embed. This lets "information" combine three APIs
+# while the others stay single-source.
 
-        if not body:
-            body = "*None available.*"
-
-        if omitted:
-            body += f"\n\n*… and {omitted} more. Check the Pet Shop in-game!*"
-
-        embed.description = f"{body}\n\n{updated}"
-        embeds.append(embed)
-
-    return embeds
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Feed formatters — called by bot.py _update_feed
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _format_information_feed(api_data: dict) -> list[discord.Embed]:
-    """3 embeds: Districts & Invasions, Field Offices, Silly Meter."""
-    return [
+# Each formatter returns list[discord.Embed] — the bot creates /
+# maintains one Discord message per embed, in order.
+FORMATTERS = {
+    "information": lambda d: [
         format_information(
-            invasions=api_data.get("invasions"),
-            population=api_data.get("population"),
-            fieldoffices=api_data.get("fieldoffices"),
+            invasions=d.get("invasions"),
+            population=d.get("population"),
+            fieldoffices=d.get("fieldoffices"),
         ),
-        format_fieldoffices(fieldoffices=api_data.get("fieldoffices")),
-        format_sillymeter(sillymeter=api_data.get("sillymeter")),
-    ]
-
-
-def _format_doodles_feed(api_data: dict) -> list[discord.Embed]:
-    return format_doodles(api_data.get("doodles"))
-
-
-FORMATTERS: dict[str, Any] = {
-    "information": _format_information_feed,
-    "doodles":     _format_doodles_feed,
+        format_sillymeter(d.get("sillymeter")),
+    ],
+    "doodles": lambda d: format_doodles(d.get("doodles")),
 }
