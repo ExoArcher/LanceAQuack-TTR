@@ -1,13 +1,27 @@
 # calculate.py
 """
-calculate.py — Cog suit disguise point calculator for LanceAQuack TTR.
+Cog suit disguise point calculator for LanceAQuack TTR.
 
-Exports:
-  register_calculate(bot)           Register the /calculate slash command.
-  build_suit_calculator_embeds()    Returns list of 4 static channel embeds.
+Exports
+-------
+    register_calculate(bot)        Register the /calculate slash command.
+    build_suit_calculator_embeds() Returns list of 4 static channel embeds.
 
 Point quotas sourced from the official TTR suit wiki tables.
 2.0 suits use separate higher quota tables.
+
+Sections
+--------
+  Activities          -- Activity dataclass, per-faction activity lists, FACTION_ACTIVITIES
+  Faction metadata    -- FACTION_META display info (label, currency, color, emoji)
+  Suit registry       -- SUITS, _V2_SUITS, _NAME_TO_ABBR, SUITS_BY_FACTION
+  Point quota tables  -- QUOTAS_V1 (normal), QUOTAS_V2 (2.0 suits)
+  Input parsing       -- parse_level(), resolve_suit(), get_quota(), valid_level_range()
+  Activity planner    -- build_options() and helpers
+  Progress bar        -- _progress_bar()
+  Result embed        -- build_result_embed()
+  Static embeds       -- build_suit_calculator_embeds()
+  Command registration-- register_calculate(bot)
 """
 from __future__ import annotations
 
@@ -18,7 +32,7 @@ import discord
 from discord import app_commands
 
 
-# ── Activity definitions ──────────────────────────────────────────────────────
+# ── ACTIVITIES ────────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class Activity:
@@ -61,7 +75,8 @@ FACTION_ACTIVITIES: dict[str, list[Activity]] = {
     "bossbot": BOSSBOT_ACTIVITIES,
 }
 
-# ── Faction display metadata ──────────────────────────────────────────────────
+
+# ── FACTION METADATA ──────────────────────────────────────────────────────────
 
 FACTION_META: dict[str, dict] = {
     "sellbot": {
@@ -91,7 +106,7 @@ FACTION_META: dict[str, dict] = {
 }
 
 
-# ── Suit registry ─────────────────────────────────────────────────────────────
+# ── SUIT REGISTRY ─────────────────────────────────────────────────────────────
 # user_abbr -> (faction, chart_key, display_name)
 
 SUITS: dict[str, tuple[str, str, str]] = {
@@ -129,7 +144,7 @@ SUITS: dict[str, tuple[str, str, str]] = {
     "TBC": ("bossbot", "TBC", "The Big Cheese"),
 }
 
-# 2.0 versions exist only for the top-tier suit of each faction
+# 2.0 versions exist only for the top-tier suit of each faction.
 _V2_SUITS: frozenset[str] = frozenset({"MH", "RB", "BW", "TBC"})
 
 _NAME_TO_ABBR: dict[str, str] = {
@@ -172,7 +187,7 @@ SUITS_BY_FACTION: dict[str, list[tuple[str, str]]] = {
 }
 
 
-# ── Point quota tables (official TTR wiki values) ─────────────────────────────
+# ── POINT QUOTA TABLES ────────────────────────────────────────────────────────
 # QUOTAS_V1[faction][chart_key][level]  = normal suit quota
 # QUOTAS_V2[chart_key][level]           = 2.0 suit quota (MH/RB/BW/TBC only)
 # level 50 = 0 = Maxed
@@ -268,7 +283,7 @@ QUOTAS_V1: dict[str, dict[str, dict[int, int]]] = {
     },
 }
 
-# 2.0 quotas — top-tier suits only (MH/RB/BW/TBC), higher than V1
+# 2.0 quotas — top-tier suits only (MH / RB / BW / TBC), higher than V1.
 QUOTAS_V2: dict[str, dict[int, int]] = {
     "MH": {
         8:1_360,  9:1_780,  10:2_200, 11:2_620, 12:8_900,
@@ -321,7 +336,7 @@ QUOTAS_V2: dict[str, dict[int, int]] = {
 }
 
 
-# ── Input parsing ─────────────────────────────────────────────────────────────
+# ── INPUT PARSING ─────────────────────────────────────────────────────────────
 
 def _norm(s: str) -> str:
     return "".join(c for c in s.lower() if c.isalnum())
@@ -329,11 +344,11 @@ def _norm(s: str) -> str:
 
 def parse_level(raw: str) -> tuple[int, bool]:
     """Parse level string -> (level_number, is_v2). Returns (-1, False) on failure."""
-    s = raw.strip()
+    s     = raw.strip()
     is_v2 = False
     for suffix in ("2.0", ".0", "v2"):
         if s.lower().endswith(suffix):
-            s = s[: -len(suffix)].strip()
+            s     = s[: -len(suffix)].strip()
             is_v2 = True
             break
     try:
@@ -345,12 +360,12 @@ def parse_level(raw: str) -> tuple[int, bool]:
 def resolve_suit(raw: str) -> tuple[str, str, str, str, bool] | None:
     """Returns (user_abbr, display_name, faction, chart_key, is_v2) or None."""
     is_v2 = False
-    s = raw.strip()
+    s     = raw.strip()
     for suffix in ("2.0", "20", "v2"):
         if s.lower().endswith(suffix):
             candidate = s[: -len(suffix)].strip().rstrip(".")
             if candidate:
-                s = candidate
+                s     = candidate
                 is_v2 = True
                 break
 
@@ -364,7 +379,7 @@ def resolve_suit(raw: str) -> tuple[str, str, str, str, bool] | None:
         return upper, name, faction, chart_key, is_v2
 
     if norm in _NAME_TO_ABBR:
-        abbr = _NAME_TO_ABBR[norm]
+        abbr             = _NAME_TO_ABBR[norm]
         faction, chart_key, name = SUITS[abbr]
         if is_v2 and abbr not in _V2_SUITS:
             is_v2 = False
@@ -395,7 +410,7 @@ def valid_level_range(user_abbr: str, faction: str, chart_key: str,
     return (min(lvls), max(lvls)) if lvls else (1, 50)
 
 
-# ── Activity planner ──────────────────────────────────────────────────────────
+# ── ACTIVITY PLANNER ──────────────────────────────────────────────────────────
 
 def _ceil_runs(pts: int, act: Activity) -> int:
     return max(1, math.ceil(pts / act.avg_pts)) if pts > 0 else 0
@@ -416,7 +431,7 @@ def build_options(pts: int, activities: list[Activity]) -> list[dict]:
     worst  = by_avg[-1]
     collected: list[dict] = []
 
-    # Smart Mix: bulk runs of best, fill remainder with second-best
+    # Smart Mix: bulk runs of best, fill remainder with second-best.
     if second != best:
         bulk = pts // best.avg_pts
         rem  = pts - bulk * best.avg_pts
@@ -438,7 +453,7 @@ def build_options(pts: int, activities: list[Activity]) -> list[dict]:
             "note":  note,
         })
 
-    # Fastest: fewest runs using highest-yield facility
+    # Fastest: fewest runs using highest-yield facility.
     n = _ceil_runs(pts, best)
     collected.append({
         "label": "Fastest",
@@ -448,7 +463,7 @@ def build_options(pts: int, activities: list[Activity]) -> list[dict]:
         "note":  "Most points per run — fewest total runs.",
     })
 
-    # Uber Friendly: lowest-yield facility (easiest to access)
+    # Uber Friendly: lowest-yield facility (easiest to access).
     if worst != best:
         n2 = _ceil_runs(pts, worst)
         collected.append({
@@ -462,14 +477,14 @@ def build_options(pts: int, activities: list[Activity]) -> list[dict]:
     return collected
 
 
-# ── Progress bar helper ───────────────────────────────────────────────────────
+# ── PROGRESS BAR ──────────────────────────────────────────────────────────────
 
 def _progress_bar(pct: float, length: int = 12) -> str:
     filled = round(pct / 100 * length)
     return "█" * filled + "░" * (length - filled)
 
 
-# ── Result embed (styled to match LanceAQuack formatting) ────────────────────
+# ── RESULT EMBED ──────────────────────────────────────────────────────────────
 
 def build_result_embed(
     suit_name: str, faction: str, level: int,
@@ -510,10 +525,10 @@ def build_result_embed(
     return embed
 
 
-# ── Static channel embeds (4 messages pinned in #suit-calculator) ─────────────
+# ── STATIC CHANNEL EMBEDS ─────────────────────────────────────────────────────
 
 def build_suit_calculator_embeds() -> list[discord.Embed]:
-    """Return the 4 static info embeds for the #suit-calculator channel."""
+    """Return the 4 static info embeds posted in #suit-calculator."""
     STATIC_COLOR = 0x9B59B6
     faction_emojis = {
         "Sellbot": "\U0001f4bc",
@@ -522,13 +537,13 @@ def build_suit_calculator_embeds() -> list[discord.Embed]:
         "Bossbot": "\U0001f454",
     }
 
-    # Embed 1: Introduction
+    # Embed 1: Introduction ───────────────────────────────────────────
     e1 = discord.Embed(
         title="\U0001f3b0 Suit-O-Nomics Calculator-inator",
         description=(
             "**Spending less time grinding, more time fighting bosses.**\n\n"
             "The Suit-O-Nomics Calculator-inator takes your current cog suit "
-            "level and how many points you’ve already earned, then calculates "
+            "level and how many points you've already earned, then calculates "
             "exactly how many facility runs stand between you and your next boss "
             "fight.\n\n"
             "Three plans are returned — **Fastest**, **Uber Friendly**, and a "
@@ -540,7 +555,7 @@ def build_suit_calculator_embeds() -> list[discord.Embed]:
         color=STATIC_COLOR,
     )
 
-    # Embed 2: Suit list
+    # Embed 2: Suit list ──────────────────────────────────────────────
     suit_sections: list[str] = []
     for faction_label, suits in SUITS_BY_FACTION.items():
         emoji = faction_emojis[faction_label]
@@ -561,7 +576,7 @@ def build_suit_calculator_embeds() -> list[discord.Embed]:
         color=STATIC_COLOR,
     )
 
-    # Embed 3: How to use
+    # Embed 3: How to use ─────────────────────────────────────────────
     e3 = discord.Embed(
         title="⌨️ How to Use",
         description=(
@@ -574,7 +589,7 @@ def build_suit_calculator_embeds() -> list[discord.Embed]:
             "`level` — The number shown next to your suit in-game "
             "(e.g. `12` for MH12, `1` for CC1). Append `.0` for a 2.0 suit "
             "(e.g. `12.0`), or add `2.0` to the suit name instead.\n"
-            "`current_points` — Points already earned toward this level’s "
+            "`current_points` — Points already earned toward this level's "
             "quota (enter `0` if you just ranked up).\n\n"
             "**Examples**\n"
             "`/calculate MH 12 3000`\n"
@@ -584,7 +599,7 @@ def build_suit_calculator_embeds() -> list[discord.Embed]:
         color=STATIC_COLOR,
     )
 
-    # Embed 4: Activity points reference
+    # Embed 4: Activity points reference ─────────────────────────────
     activity_blocks: list[str] = []
     for faction_key, acts in FACTION_ACTIVITIES.items():
         meta  = FACTION_META[faction_key]
@@ -601,7 +616,7 @@ def build_suit_calculator_embeds() -> list[discord.Embed]:
     return [e1, e2, e3, e4]
 
 
-# ── Command registration ──────────────────────────────────────────────────────
+# ── COMMAND REGISTRATION ──────────────────────────────────────────────────────
 
 def register_calculate(bot) -> None:
 

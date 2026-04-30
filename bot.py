@@ -5,13 +5,14 @@ How it works
 ------------
 1. The bot is invited to one or more Discord servers. Only servers
    whose ID is in the *effective* allowlist (env ``GUILD_ALLOWLIST``
-   u runtime allowlist persisted in ``state.json``) are accepted; the
+   + runtime allowlist persisted in ``state.json``) are accepted; the
    bot leaves any other guild that tries to add it, DMing the owner
    with instructions to request access from ExoArcher.
 2. In each allowed guild, an admin runs **``/laq-setup``** once. That
    command finds-or-creates the ``Toontown Rewritten`` category plus a
-   ``#tt-information`` and ``#tt-doodles`` channel, posts a placeholder
-   message in each, and stores the message IDs in ``state.json``.
+   ``#tt-information``, ``#tt-doodles``, and ``#suit-calculator`` channel,
+   posts placeholder messages in each, and stores the message IDs in
+   ``state.json``.
 3. A background task runs every ``$REFRESH_INTERVAL`` seconds, fetches
    the TTR APIs ONCE, and edits each tracked guild's messages in place.
    Doodle embeds are only updated every 12 hours (or on /laq-refresh).
@@ -21,19 +22,23 @@ Slash commands (all users)
 --------------------------
 ``/ttrinfo``      -- DM current district/invasion/sillymeter info. Works as a User App.
 ``/doodleinfo``   -- DM the full doodle list with ratings. Works as a User App.
-``/laq-refresh``  -- force an immediate refresh and sweep old messages.
+``/helpme``       -- DM the list of available bot commands.
+``/invite-app``   -- DM the link to add the bot to a personal Discord account.
+``/invite-server``-- DM the link to add the bot to a Discord server.
+``/laq-refresh``  -- Force an immediate refresh and sweep old messages.
+``/calculate``    -- Calculate remaining suit points and get optimised activity plans.
 
 Slash commands (Manage Channels + Manage Messages)
 ---------------------------------------------------
-``/laq-setup``    -- create channels and start tracking this guild.
-``/laq-teardown`` -- stop tracking this guild (channels are NOT deleted).
+``/laq-setup``    -- Create channels and start tracking this guild.
+``/laq-teardown`` -- Stop tracking this guild (channels are NOT deleted).
 
 Console commands
 ----------------
-``announce <text>`` -- broadcast a message to every tracked guild (auto-deletes in 30 min).
-``maintenance``     -- toggle maintenance mode banner in all tracked guild channels.
-``stop``            -- notify all servers of shutdown, then exit.
-``restart``         -- notify all servers, then hot-restart the process.
+``announce <text>`` -- Broadcast a message to every tracked guild (auto-deletes in 30 min).
+``maintenance``     -- Toggle maintenance mode banner in all tracked guild channels.
+``stop``            -- Notify all servers of shutdown, then exit.
+``restart``         -- Notify all servers, then hot-restart the process.
 
 Panel announcements
 -------------------
@@ -65,7 +70,7 @@ try:
         print("[auto-update] Repo initialised. Restarting with GitHub code...", flush=True)
         _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
     else:
-        # Compare local HEAD vs remote to avoid infinite restart loop
+        # Compare local HEAD vs remote to avoid infinite restart loop.
         _subprocess.run(["git", "fetch", "origin", "main"],
                         cwd=_BOT_DIR, check=True, capture_output=True)
         _local  = _subprocess.run(["git", "rev-parse", "HEAD"],
@@ -101,21 +106,26 @@ from ttr_api import TTRApiClient
 from Console import run_console
 from calculate import register_calculate, build_suit_calculator_embeds
 
+# ── Logging ───────────────────────────────────────────────────────────────────
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 log = logging.getLogger("ttr-bot")
 
-STATE_FILE = Path(__file__).with_name("state.json")
-STATE_VERSION = 2
-ANNOUNCE_FILE = Path(__file__).with_name("panel_announce.txt")
+# ── Constants & paths ─────────────────────────────────────────────────────────
+
+STATE_FILE     = Path(__file__).with_name("state.json")
+STATE_VERSION  = 2
+ANNOUNCE_FILE  = Path(__file__).with_name("panel_announce.txt")
 TEARDOWN_LOG   = Path(__file__).with_name("teardown_log.txt")
 WELCOMED_FILE  = Path(__file__).with_name("welcomed_users.json")
 BANNED_FILE    = Path(__file__).with_name("banned_users.json")
-ANNOUNCEMENT_TITLE = "📢 LAQ Bot Announcement"
+
+ANNOUNCEMENT_TITLE       = "📢 LAQ Bot Announcement"
 ANNOUNCEMENT_TTL_SECONDS = 30 * 60
-DOODLE_REFRESH_INTERVAL = 12 * 60 * 60  # 12 hours in seconds
+DOODLE_REFRESH_INTERVAL  = 12 * 60 * 60  # 12 hours in seconds
 
 # Shown to any guild owner whose server fails the allowlist check.
 CLOSED_ACCESS_MSG = (
@@ -125,6 +135,10 @@ CLOSED_ACCESS_MSG = (
 )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# TTRBot
+# ─────────────────────────────────────────────────────────────────────────────
+
 class TTRBot(discord.Client):
     def __init__(self, config: Config) -> None:
         intents = discord.Intents.default()
@@ -132,18 +146,18 @@ class TTRBot(discord.Client):
         super().__init__(intents=intents)
 
         self.config = config
-        self.tree = app_commands.CommandTree(self)
+        self.tree   = app_commands.CommandTree(self)
         self.state: dict[str, Any] = self._load_state()
         self._api: TTRApiClient | None = None
-        self._refresh_lock = asyncio.Lock()
-        self._state_lock = asyncio.Lock()
+        self._refresh_lock  = asyncio.Lock()
+        self._state_lock    = asyncio.Lock()
         # Set by Console 'stop' so close() skips its own duplicate broadcast.
         self._console_stop_sent: bool = False
         # Timestamp of the last time doodle embeds were pushed to Discord.
-        # 0.0 means never — triggers an immediate doodle refresh on first run.
+        # 0.0 = never, which triggers an immediate doodle refresh on first run.
         self._last_doodle_refresh: float = 0.0
 
-    # ------------------------------------------------------------------ state
+    # ── STATE MANAGEMENT ──────────────────────────────────────────────────────
 
     def _load_state(self) -> dict[str, Any]:
         if not STATE_FILE.exists():
@@ -225,14 +239,14 @@ class TTRBot(discord.Client):
         })
         await self._save_state()
 
-    # --------------------------------------------------------------- lifecycle
+    # ── LIFECYCLE ─────────────────────────────────────────────────────────────
 
     async def setup_hook(self) -> None:
         self._api = TTRApiClient(self.config.user_agent)
         await self._api.__aenter__()
 
-        # Push an empty global command list to Discord, wiping any old
-        # stale global commands (ttr_refresh, laq_guild_add, etc.).
+        # Push an empty global command list to Discord, wiping any stale
+        # global commands (ttr_refresh, laq_guild_add, etc.).
         self.tree.clear_commands(guild=None)
         await self.tree.sync()
 
@@ -283,7 +297,6 @@ class TTRBot(discord.Client):
             await self._sync_commands_to_guild(guild)
 
         await self._cleanup_maintenance_msgs()
-        # Start the hosting-panel console listener (stop / restart / help).
         asyncio.create_task(run_console(self), name="console-listener")
         await self._cleanup_announcements_on_startup()
         await self._refresh_suit_calculator_all_guilds()
@@ -307,6 +320,8 @@ class TTRBot(discord.Client):
         log.info("Removed from guild %s (id=%s)", guild.name, guild.id)
         self._guilds_block().pop(str(guild.id), None)
         await self._save_state()
+
+    # ── GUILD ACCESS ──────────────────────────────────────────────────────────
 
     async def _sync_commands_to_guild(self, guild: discord.Guild) -> None:
         """Aggressively wipe all old per-guild commands then push the new set."""
@@ -332,7 +347,7 @@ class TTRBot(discord.Client):
         except Exception as e:
             log.warning("Failed to leave guild %s: %s", guild.id, e)
 
-    # ------------------------------------------------- channel bootstrapping
+    # ── CHANNEL BOOTSTRAPPING ─────────────────────────────────────────────────
 
     async def _ensure_channels_for_guild(self, guild: discord.Guild) -> None:
         category = discord.utils.get(guild.categories, name=self.config.category_name)
@@ -349,7 +364,6 @@ class TTRBot(discord.Client):
                 )
             await self._ensure_messages(guild.id, key, channel, at_least=1)
 
-        # ── Static #suit-calculator channel ──────────────────────────────
         calc_name = self.config.channel_suit_calculator
         calc_ch   = discord.utils.get(guild.text_channels, name=calc_name)
         if calc_ch is None:
@@ -359,7 +373,6 @@ class TTRBot(discord.Client):
                 topic="Cog suit disguise calculator — use /calculate here.",
             )
         await self._ensure_suit_calculator_pin(guild.id, calc_ch)
-
         await self._save_state()
 
     async def _send_placeholder(self, key: str, channel: discord.TextChannel) -> discord.Message:
@@ -395,17 +408,15 @@ class TTRBot(discord.Client):
         self._set_state(guild_id, key, channel.id, verified)
         return verified
 
-    # ------------------------------------------------------- announcement cleanup
+    # ── SUIT CALCULATOR ───────────────────────────────────────────────────────
 
     async def _ensure_suit_calculator_pin(
         self, guild_id: int, channel: discord.TextChannel,
     ) -> None:
-        """
-        Post (or edit in place) the 4 static info embeds in #suit-calculator.
-        """
-        embeds  = build_suit_calculator_embeds()
-        gs      = self._guild_state(guild_id)
-        entry   = gs.get("suit_calculator", {})
+        """Post (or edit in place) the 4 static info embeds in #suit-calculator."""
+        embeds     = build_suit_calculator_embeds()
+        gs         = self._guild_state(guild_id)
+        entry      = gs.get("suit_calculator", {})
         stored_ids: list[int] = []
 
         if isinstance(entry, dict):
@@ -456,12 +467,12 @@ class TTRBot(discord.Client):
                 continue
             if self.get_guild(guild_id) is None:
                 continue
-            gs    = self._guild_state(guild_id)
-            entry = gs.get("suit_calculator", {})
+            gs         = self._guild_state(guild_id)
+            entry      = gs.get("suit_calculator", {})
             channel_id = int(entry.get("channel_id", 0)) if isinstance(entry, dict) else 0
-            channel = self.get_channel(channel_id) if channel_id else None
+            channel    = self.get_channel(channel_id) if channel_id else None
             if not isinstance(channel, discord.TextChannel):
-                guild = self.get_guild(guild_id)
+                guild   = self.get_guild(guild_id)
                 channel = (
                     discord.utils.get(guild.text_channels, name=calc_name)
                     if guild else None
@@ -476,6 +487,261 @@ class TTRBot(discord.Client):
         if updated:
             log.info("[suit-calc] Refreshed embeds for %d guild(s).", updated)
             await self._save_state()
+
+    # ── FEED REFRESH ──────────────────────────────────────────────────────────
+
+    _API_KEYS = ("invasions", "population", "fieldoffices", "doodles", "sillymeter")
+
+    async def _fetch_all(self) -> dict[str, dict | None]:
+        if self._api is None:
+            return {k: None for k in self._API_KEYS}
+        results = await asyncio.gather(
+            *(self._api.fetch(k) for k in self._API_KEYS), return_exceptions=True,
+        )
+        return {
+            k: (None if isinstance(r, BaseException) else r)
+            for k, r in zip(self._API_KEYS, results)
+        }
+
+    async def _refresh_once(self, *, force_doodles: bool = False) -> None:
+        """Refresh all live feed embeds across tracked guilds.
+
+        Doodle embeds are throttled to once every 12 hours unless
+        *force_doodles* is True (set by /laq-refresh).
+        """
+        if self._api is None:
+            return
+        async with self._refresh_lock:
+            now             = time.time()
+            refresh_doodles = force_doodles or (
+                (now - self._last_doodle_refresh) >= DOODLE_REFRESH_INTERVAL
+            )
+            api_data         = await self._fetch_all()
+            total_messages   = 0
+            guilds_updated: set[int] = set()
+
+            for guild_id_str in list(self._guilds_block().keys()):
+                try:
+                    guild_id = int(guild_id_str)
+                except ValueError:
+                    continue
+                if not self.is_guild_allowed(guild_id) or self.get_guild(guild_id) is None:
+                    continue
+                for feed_key in self.config.feeds():
+                    # Skip doodle embeds unless the 12-hour interval has elapsed
+                    # (or this is a forced refresh from /laq-refresh).
+                    if feed_key == "doodles" and not refresh_doodles:
+                        continue
+                    try:
+                        updated = await self._update_feed(guild_id, feed_key, api_data)
+                        if updated:
+                            total_messages += updated
+                            guilds_updated.add(guild_id)
+                    except Exception:
+                        log.exception("Failed updating %s/%s", guild_id, feed_key)
+
+            if refresh_doodles:
+                self._last_doodle_refresh = now
+                log.info("Doodle embeds refreshed (next automatic refresh in 12 hours).")
+
+            if total_messages:
+                log.info(
+                    "Embed refresh: %d message(s) updated across %d server(s)",
+                    total_messages, len(guilds_updated),
+                )
+            else:
+                log.info("Embed refresh: no tracked servers to update.")
+            await self._save_state()
+
+    async def _update_feed(self, guild_id: int, feed_key: str, api_data: dict[str, dict | None]) -> int:
+        """Update a single feed for a guild. Returns the number of messages edited/sent."""
+        entry = self._guild_state(guild_id).get(feed_key)
+        if not entry:
+            return 0
+        channel = self.get_channel(int(entry["channel_id"]))
+        if not isinstance(channel, discord.TextChannel):
+            return 0
+        formatter = FORMATTERS.get(feed_key)
+        if formatter is None:
+            return 0
+        embeds = formatter(api_data)
+        if not isinstance(embeds, list):
+            embeds = [embeds]
+        if not embeds:
+            return 0
+
+        ids      = await self._ensure_messages(guild_id, feed_key, channel, at_least=len(embeds))
+        kept_ids: list[int] = []
+        edited   = 0
+
+        for mid, embed in zip(ids, embeds):
+            try:
+                await (await channel.fetch_message(mid)).edit(embed=embed)
+                kept_ids.append(mid)
+                edited += 1
+            except discord.NotFound:
+                new_msg = await channel.send(embed=embed)
+                try:
+                    await new_msg.pin(reason="Live TTR feed pin")
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+                kept_ids.append(new_msg.id)
+                edited += 1
+            except discord.HTTPException as e:
+                log.warning("Transient HTTP %s editing message %s (%s/%s) -- will retry.", e.status, mid, guild_id, feed_key)
+                kept_ids.append(mid)
+            await asyncio.sleep(3.0)
+
+        for mid in ids[len(embeds):]:
+            try:
+                await (await channel.fetch_message(mid)).edit(
+                    embed=discord.Embed(description="*(no data for this tier right now)*", color=0x95A5A6)
+                )
+                kept_ids.append(mid)
+                edited += 1
+            except discord.NotFound:
+                pass
+            except discord.HTTPException as e:
+                log.warning("Transient HTTP %s on stale-slot message %s -- keeping ID.", e.status, mid)
+                kept_ids.append(mid)
+            await asyncio.sleep(3.0)
+
+        self._set_state(guild_id, feed_key, channel.id, kept_ids)
+        return edited
+
+    @tasks.loop(seconds=60)
+    async def _refresh_loop(self) -> None:
+        try:
+            await self._sweep_expired_announcements()
+        except Exception:
+            log.exception("Announcement sweep failed")
+        try:
+            await self._check_panel_announce()
+        except Exception:
+            log.exception("Panel announce check failed")
+        await self._refresh_once()
+
+    @_refresh_loop.before_loop
+    async def _before_loop(self) -> None:
+        await self.wait_until_ready()
+
+    # ── STALE MESSAGE SWEEP ───────────────────────────────────────────────────
+
+    def _channel_keep_ids(self, guild_id: int, channel_id: int) -> set[int]:
+        """Return the set of message IDs the bot should NOT delete in *channel_id*."""
+        keep: set[int] = set()
+        for entry in self._guild_state(guild_id).values():
+            if not isinstance(entry, dict):
+                continue
+            if int(entry.get("channel_id", 0)) != channel_id:
+                continue
+            for mid in entry.get("message_ids", []) or []:
+                try:
+                    keep.add(int(mid))
+                except (TypeError, ValueError):
+                    pass
+        for record in self._announcements():
+            if int(record.get("channel_id", 0)) == channel_id:
+                try:
+                    keep.add(int(record.get("message_id", 0)))
+                except (TypeError, ValueError):
+                    pass
+        return keep
+
+    async def _sweep_channel_stale(
+        self, channel: discord.TextChannel, *, keep_ids: set[int], history_limit: int = 200,
+    ) -> int:
+        if self.user is None:
+            return 0
+        bot_id  = self.user.id
+        deleted = 0
+        try:
+            async for msg in channel.history(limit=history_limit):
+                if msg.author.id != bot_id or msg.id in keep_ids:
+                    continue
+                try:
+                    await msg.delete()
+                    deleted += 1
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
+        except discord.Forbidden:
+            log.debug("No Read Message History in #%s; skipping sweep", channel.name)
+        return deleted
+
+    async def _sweep_guild_stale(self, guild_id: int) -> int:
+        total = 0
+        seen: set[int] = set()
+        for entry in self._guild_state(guild_id).values():
+            channel_id = int(entry.get("channel_id", 0))
+            if channel_id in seen or channel_id == 0:
+                continue
+            seen.add(channel_id)
+            channel = self.get_channel(channel_id)
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            total += await self._sweep_channel_stale(channel, keep_ids=self._channel_keep_ids(guild_id, channel_id))
+        return total
+
+    async def _sweep_expired_announcements(self) -> None:
+        now     = time.time()
+        expired = [r for r in list(self._announcements()) if float(r.get("expires_at", 0)) <= now]
+        for record in expired:
+            await self._delete_announcement_record(record)
+        if expired:
+            await self._save_state()
+
+    @tasks.loop(minutes=15)
+    async def _sweep_loop(self) -> None:
+        """Sweep stale bot messages from all tracked channels every 15 minutes."""
+        for guild_id_str in list(self._guilds_block().keys()):
+            try:
+                guild_id = int(guild_id_str)
+            except ValueError:
+                continue
+            if not self.is_guild_allowed(guild_id) or self.get_guild(guild_id) is None:
+                continue
+            try:
+                swept = await self._sweep_guild_stale(guild_id)
+                if swept:
+                    log.info("Periodic sweep: removed %d stale message(s) in guild %s", swept, guild_id)
+            except Exception:
+                log.exception("Periodic sweep failed for guild %s", guild_id)
+
+    @_sweep_loop.before_loop
+    async def _before_sweep_loop(self) -> None:
+        await self.wait_until_ready()
+
+    # ── ANNOUNCEMENTS ─────────────────────────────────────────────────────────
+
+    async def _broadcast_announcement(self, text: str) -> tuple[int, int, int]:
+        embed = discord.Embed(title=ANNOUNCEMENT_TITLE, description=text, color=0xF1C40F)
+        embed.set_footer(text=f"This message will auto-delete in {ANNOUNCEMENT_TTL_SECONDS // 60} minutes.")
+        expires_at     = time.time() + ANNOUNCEMENT_TTL_SECONDS
+        sent = failed  = 0
+        guilds_touched: set[int] = set()
+
+        for guild_id_str, gs in list(self._guilds_block().items()):
+            try:
+                guild_id = int(guild_id_str)
+            except ValueError:
+                continue
+            for feed_key in self.config.feeds():
+                entry = gs.get(feed_key)
+                if not entry:
+                    continue
+                channel = self.get_channel(int(entry.get("channel_id", 0)))
+                if not isinstance(channel, discord.TextChannel):
+                    continue
+                try:
+                    msg = await channel.send(embed=embed)
+                    await self._record_announcement(guild_id, channel.id, msg.id, expires_at)
+                    sent += 1
+                    guilds_touched.add(guild_id)
+                except (discord.Forbidden, discord.HTTPException) as e:
+                    log.warning("Broadcast failed for %s/#%s: %s", guild_id, channel.name, e)
+                    failed += 1
+
+        return sent, failed, len(guilds_touched)
 
     async def _delete_announcement_record(self, record: dict[str, Any]) -> None:
         channel_id = int(record.get("channel_id", 0))
@@ -497,7 +763,7 @@ class TTRBot(discord.Client):
 
     async def _cleanup_announcements_on_startup(self) -> None:
         cleared = 0
-        failed = 0
+        failed  = 0
 
         stale_records = list(self._announcements())
         if stale_records:
@@ -545,72 +811,61 @@ class TTRBot(discord.Client):
                 cleared, failed,
             )
 
-    # --------------------------------------------------------- stale-message sweep
+    # ── MAINTENANCE ───────────────────────────────────────────────────────────
 
-    def _channel_keep_ids(self, guild_id: int, channel_id: int) -> set[int]:
-        """Return the set of message IDs the bot should NOT delete in *channel_id*."""
-        keep: set[int] = set()
-        for entry in self._guild_state(guild_id).values():
-            if not isinstance(entry, dict):
+    async def _broadcast_maintenance(self) -> None:
+        """Send a maintenance embed to every tracked guild info channel."""
+        embed = discord.Embed(
+            title=":wrench: Temporary Maintenance",
+            description=(
+                "The bot is going down for temporary maintenance. "
+                "Please check [toonhq.org](https://toonhq.org) in the "
+                "meantime for your toony needs!"
+            ),
+            color=0xE67E22,
+            timestamp=datetime.now(timezone.utc),
+        )
+        maintenance_ids: dict[str, int] = {}
+        for guild_id_str, gs in list(self._guilds_block().items()):
+            info_entry = gs.get("information")
+            if not info_entry:
                 continue
-            if int(entry.get("channel_id", 0)) != channel_id:
-                continue
-            for mid in entry.get("message_ids", []) or []:
-                try:
-                    keep.add(int(mid))
-                except (TypeError, ValueError):
-                    pass
-        for record in self._announcements():
-            if int(record.get("channel_id", 0)) == channel_id:
-                try:
-                    keep.add(int(record.get("message_id", 0)))
-                except (TypeError, ValueError):
-                    pass
-        return keep
-
-    async def _sweep_channel_stale(
-        self, channel: discord.TextChannel, *, keep_ids: set[int], history_limit: int = 200,
-    ) -> int:
-        if self.user is None:
-            return 0
-        bot_id = self.user.id
-        deleted = 0
-        try:
-            async for msg in channel.history(limit=history_limit):
-                if msg.author.id != bot_id or msg.id in keep_ids:
-                    continue
-                try:
-                    await msg.delete()
-                    deleted += 1
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    pass
-        except discord.Forbidden:
-            log.debug("No Read Message History in #%s; skipping sweep", channel.name)
-        return deleted
-
-    async def _sweep_guild_stale(self, guild_id: int) -> int:
-        total = 0
-        seen: set[int] = set()
-        for entry in self._guild_state(guild_id).values():
-            channel_id = int(entry.get("channel_id", 0))
-            if channel_id in seen or channel_id == 0:
-                continue
-            seen.add(channel_id)
-            channel = self.get_channel(channel_id)
+            channel = self.get_channel(int(info_entry["channel_id"]))
             if not isinstance(channel, discord.TextChannel):
                 continue
-            total += await self._sweep_channel_stale(channel, keep_ids=self._channel_keep_ids(guild_id, channel_id))
-        return total
-
-    async def _sweep_expired_announcements(self) -> None:
-        now = time.time()
-        expired = [r for r in list(self._announcements()) if float(r.get("expires_at", 0)) <= now]
-        for record in expired:
-            await self._delete_announcement_record(record)
-        if expired:
+            try:
+                msg = await channel.send(embed=embed)
+                maintenance_ids[guild_id_str] = msg.id
+                log.info("Sent maintenance notice to guild %s", guild_id_str)
+            except Exception as exc:
+                log.warning("Could not send maintenance notice to %s: %s", guild_id_str, exc)
+        if maintenance_ids:
+            self.state["maintenance_msgs"] = maintenance_ids
             await self._save_state()
 
-    # --------------------------------------------------------- panel file announce
+    async def _cleanup_maintenance_msgs(self) -> None:
+        """Delete maintenance messages left from the previous shutdown."""
+        maintenance_ids: dict[str, int] = self.state.pop("maintenance_msgs", {})
+        if not maintenance_ids:
+            return
+        cleaned = 0
+        for guild_id_str, msg_id in maintenance_ids.items():
+            gs         = self._guilds_block().get(guild_id_str, {})
+            info_entry = gs.get("information")
+            if not info_entry:
+                continue
+            channel = self.get_channel(int(info_entry["channel_id"]))
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.delete()
+                cleaned += 1
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+        await self._save_state()
+        if cleaned:
+            log.info("Startup cleanup: removed %d maintenance notice(s).", cleaned)
 
     async def _check_panel_announce(self) -> None:
         """Broadcast panel_announce.txt contents if the file exists, then delete it."""
@@ -628,59 +883,7 @@ class TTRBot(discord.Client):
         sent, failed, guilds = await self._broadcast_announcement(text)
         log.info("Panel announcement: %d msg(s) across %d guild(s), %d failed.", sent, guilds, failed)
 
-    # ----------------------------------------------------------------- poll loops
-
-    @tasks.loop(seconds=60)
-    async def _refresh_loop(self) -> None:
-        try:
-            await self._sweep_expired_announcements()
-        except Exception:
-            log.exception("Announcement sweep failed")
-        try:
-            await self._check_panel_announce()
-        except Exception:
-            log.exception("Panel announce check failed")
-        await self._refresh_once()
-
-    @_refresh_loop.before_loop
-    async def _before_loop(self) -> None:
-        await self.wait_until_ready()
-
-    @tasks.loop(minutes=15)
-    async def _sweep_loop(self) -> None:
-        """Sweep stale bot messages from all tracked channels every 15 minutes."""
-        for guild_id_str in list(self._guilds_block().keys()):
-            try:
-                guild_id = int(guild_id_str)
-            except ValueError:
-                continue
-            if not self.is_guild_allowed(guild_id) or self.get_guild(guild_id) is None:
-                continue
-            try:
-                swept = await self._sweep_guild_stale(guild_id)
-                if swept:
-                    log.info("Periodic sweep: removed %d stale message(s) in guild %s", swept, guild_id)
-            except Exception:
-                log.exception("Periodic sweep failed for guild %s", guild_id)
-
-    @_sweep_loop.before_loop
-    async def _before_sweep_loop(self) -> None:
-        await self.wait_until_ready()
-
-    _API_KEYS = ("invasions", "population", "fieldoffices", "doodles", "sillymeter")
-
-    async def _fetch_all(self) -> dict[str, dict | None]:
-        if self._api is None:
-            return {k: None for k in self._API_KEYS}
-        results = await asyncio.gather(
-            *(self._api.fetch(k) for k in self._API_KEYS), return_exceptions=True,
-        )
-        return {
-            k: (None if isinstance(r, BaseException) else r)
-            for k, r in zip(self._API_KEYS, results)
-        }
-
-    # ------------------------------------------------- welcome DM (user install)
+    # ── USER SYSTEM ───────────────────────────────────────────────────────────
 
     def _load_welcomed(self) -> set[int]:
         """Return set of user IDs that have already received the welcome DM."""
@@ -720,9 +923,6 @@ class TTRBot(discord.Client):
         except discord.Forbidden:
             pass  # DMs closed, skip silently
 
-
-    # ------------------------------------------------- ban system
-
     def _load_banned(self) -> dict[str, dict]:
         """Return banlist as {str(user_id): {reason, banned_at, banned_by, banned_by_id}}."""
         try:
@@ -747,7 +947,7 @@ class TTRBot(discord.Client):
         record = self._is_banned(interaction.user.id)
         if record is None:
             return False
-        reason   = record.get("reason") or "No reason given."
+        reason    = record.get("reason") or "No reason given."
         banned_at = record.get("banned_at", "unknown date")
         msg = (
             ":no_entry: **You have been banned from using LanceAQuack TTR.**\n\n"
@@ -766,203 +966,11 @@ class TTRBot(discord.Client):
         )
         return True
 
-    # ------------------------------------------------- maintenance broadcast
-
-    async def _broadcast_maintenance(self) -> None:
-        """Send a maintenance embed to every tracked guild info channel."""
-        embed = discord.Embed(
-            title=":wrench: Temporary Maintenance",
-            description=(
-                "The bot is going down for temporary maintenance. "
-                "Please check [toonhq.org](https://toonhq.org) in the "
-                "meantime for your toony needs!"
-            ),
-            color=0xE67E22,
-            timestamp=datetime.now(timezone.utc),
-        )
-        maintenance_ids: dict[str, int] = {}
-        for guild_id_str, gs in list(self._guilds_block().items()):
-            info_entry = gs.get("information")
-            if not info_entry:
-                continue
-            channel = self.get_channel(int(info_entry["channel_id"]))
-            if not isinstance(channel, discord.TextChannel):
-                continue
-            try:
-                msg = await channel.send(embed=embed)
-                maintenance_ids[guild_id_str] = msg.id
-                log.info("Sent maintenance notice to guild %s", guild_id_str)
-            except Exception as exc:
-                log.warning("Could not send maintenance notice to %s: %s", guild_id_str, exc)
-        if maintenance_ids:
-            self.state["maintenance_msgs"] = maintenance_ids
-            await self._save_state()
-
-    # ------------------------------------------------- maintenance cleanup
-
-    async def _cleanup_maintenance_msgs(self) -> None:
-        """Delete maintenance messages left from the previous shutdown."""
-        maintenance_ids: dict[str, int] = self.state.pop("maintenance_msgs", {})
-        if not maintenance_ids:
-            return
-        cleaned = 0
-        for guild_id_str, msg_id in maintenance_ids.items():
-            gs = self._guilds_block().get(guild_id_str, {})
-            info_entry = gs.get("information")
-            if not info_entry:
-                continue
-            channel = self.get_channel(int(info_entry["channel_id"]))
-            if not isinstance(channel, discord.TextChannel):
-                continue
-            try:
-                msg = await channel.fetch_message(msg_id)
-                await msg.delete()
-                cleaned += 1
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass
-        await self._save_state()
-        if cleaned:
-            log.info("Startup cleanup: removed %d maintenance notice(s).", cleaned)
-
-    async def _refresh_once(self, *, force_doodles: bool = False) -> None:
-        """Refresh all live feed embeds across tracked guilds.
-
-        Doodle embeds are throttled to once every 12 hours unless
-        *force_doodles* is True (set by /laq-refresh).
-        """
-        if self._api is None:
-            return
-        async with self._refresh_lock:
-            now = time.time()
-            refresh_doodles = force_doodles or (
-                (now - self._last_doodle_refresh) >= DOODLE_REFRESH_INTERVAL
-            )
-
-            api_data = await self._fetch_all()
-            total_messages = 0
-            guilds_updated: set[int] = set()
-            for guild_id_str in list(self._guilds_block().keys()):
-                try:
-                    guild_id = int(guild_id_str)
-                except ValueError:
-                    continue
-                if not self.is_guild_allowed(guild_id) or self.get_guild(guild_id) is None:
-                    continue
-                for feed_key in self.config.feeds():
-                    # Skip doodle embeds unless the 12-hour interval has elapsed
-                    # (or this is a forced refresh from /laq-refresh).
-                    if feed_key == "doodles" and not refresh_doodles:
-                        continue
-                    try:
-                        updated = await self._update_feed(guild_id, feed_key, api_data)
-                        if updated:
-                            total_messages += updated
-                            guilds_updated.add(guild_id)
-                    except Exception:
-                        log.exception("Failed updating %s/%s", guild_id, feed_key)
-
-            if refresh_doodles:
-                self._last_doodle_refresh = now
-                log.info(
-                    "Doodle embeds refreshed (next automatic refresh in 12 hours)."
-                )
-
-            if total_messages:
-                log.info(
-                    "Embed refresh: %d message(s) updated across %d server(s)",
-                    total_messages, len(guilds_updated),
-                )
-            else:
-                log.info("Embed refresh: no tracked servers to update.")
-            await self._save_state()
-
-    async def _update_feed(self, guild_id: int, feed_key: str, api_data: dict[str, dict | None]) -> int:
-        """Update a single feed for a guild. Returns the number of messages edited/sent."""
-        entry = self._guild_state(guild_id).get(feed_key)
-        if not entry:
-            return 0
-        channel = self.get_channel(int(entry["channel_id"]))
-        if not isinstance(channel, discord.TextChannel):
-            return 0
-        formatter = FORMATTERS.get(feed_key)
-        if formatter is None:
-            return 0
-        embeds = formatter(api_data)
-        if not isinstance(embeds, list):
-            embeds = [embeds]
-        if not embeds:
-            return 0
-        ids = await self._ensure_messages(guild_id, feed_key, channel, at_least=len(embeds))
-        kept_ids: list[int] = []
-        edited = 0
-        for mid, embed in zip(ids, embeds):
-            try:
-                await (await channel.fetch_message(mid)).edit(embed=embed)
-                kept_ids.append(mid)
-                edited += 1
-            except discord.NotFound:
-                new_msg = await channel.send(embed=embed)
-                try:
-                    await new_msg.pin(reason="Live TTR feed pin")
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
-                kept_ids.append(new_msg.id)
-                edited += 1
-            except discord.HTTPException as e:
-                log.warning("Transient HTTP %s editing message %s (%s/%s) -- will retry.", e.status, mid, guild_id, feed_key)
-                kept_ids.append(mid)
-            await asyncio.sleep(3.0)
-        for mid in ids[len(embeds):]:
-            try:
-                await (await channel.fetch_message(mid)).edit(
-                    embed=discord.Embed(description="*(no data for this tier right now)*", color=0x95A5A6)
-                )
-                kept_ids.append(mid)
-                edited += 1
-            except discord.NotFound:
-                pass
-            except discord.HTTPException as e:
-                log.warning("Transient HTTP %s on stale-slot message %s -- keeping ID.", e.status, mid)
-                kept_ids.append(mid)
-            await asyncio.sleep(3.0)
-        self._set_state(guild_id, feed_key, channel.id, kept_ids)
-        return edited
-
-    # ------------------------------------------------------- announcement broadcast
-
-    async def _broadcast_announcement(self, text: str) -> tuple[int, int, int]:
-        embed = discord.Embed(title=ANNOUNCEMENT_TITLE, description=text, color=0xF1C40F)
-        embed.set_footer(text=f"This message will auto-delete in {ANNOUNCEMENT_TTL_SECONDS // 60} minutes.")
-        expires_at = time.time() + ANNOUNCEMENT_TTL_SECONDS
-        sent = failed = 0
-        guilds_touched: set[int] = set()
-        for guild_id_str, gs in list(self._guilds_block().items()):
-            try:
-                guild_id = int(guild_id_str)
-            except ValueError:
-                continue
-            for feed_key in self.config.feeds():
-                entry = gs.get(feed_key)
-                if not entry:
-                    continue
-                channel = self.get_channel(int(entry.get("channel_id", 0)))
-                if not isinstance(channel, discord.TextChannel):
-                    continue
-                try:
-                    msg = await channel.send(embed=embed)
-                    await self._record_announcement(guild_id, channel.id, msg.id, expires_at)
-                    sent += 1
-                    guilds_touched.add(guild_id)
-                except (discord.Forbidden, discord.HTTPException) as e:
-                    log.warning("Broadcast failed for %s/#%s: %s", guild_id, channel.name, e)
-                    failed += 1
-        return sent, failed, len(guilds_touched)
-
-    # ----------------------------------------------------------------- commands
+    # ── SLASH COMMANDS ────────────────────────────────────────────────────────
 
     def _register_commands(self) -> None:
 
-        # -- /ttrinfo  (all users, guild + user install) -------------------
+        # ── /ttrinfo  (all users, guild + user install) ────────────────────
         @self.tree.command(
             name="ttrinfo",
             description="[User Command] See current Toontown district, invasion, field office, and Silly Meter info.",
@@ -1001,7 +1009,7 @@ class TTRBot(discord.Client):
                     ephemeral=True,
                 )
 
-        # -- /doodleinfo  (all users, guild + user install) -----------------
+        # ── /doodleinfo  (all users, guild + user install) ─────────────────
         @self.tree.command(
             name="doodleinfo",
             description="[User Command] See the current Toontown doodle list with trait ratings.",
@@ -1028,7 +1036,7 @@ class TTRBot(discord.Client):
                     ephemeral=True,
                 )
 
-        # -- /helpme  (all users, guild + user install) ----------------------
+        # ── /helpme  (all users, guild + user install) ─────────────────────
         @self.tree.command(
             name="helpme",
             description="[User Command] Show available bot commands and descriptions.",
@@ -1056,8 +1064,7 @@ class TTRBot(discord.Client):
             except discord.Forbidden:
                 await interaction.response.send_message(msg, ephemeral=True)
 
-
-        # -- /invite-app  (all users, guild + user install) -----------------
+        # ── /invite-app  (all users, guild + user install) ─────────────────
         @self.tree.command(
             name="invite-app",
             description="[User Command] Add LanceAQuack TTR to your personal Discord account.",
@@ -1096,7 +1103,7 @@ class TTRBot(discord.Client):
             except discord.Forbidden:
                 await interaction.response.send_message(msg, ephemeral=True)
 
-        # -- /invite-server  (all users, guild + user install) ---------------
+        # ── /invite-server  (all users, guild + user install) ──────────────
         @self.tree.command(
             name="invite-server",
             description="[User Command] Add LanceAQuack TTR to a Discord server.",
@@ -1138,7 +1145,7 @@ class TTRBot(discord.Client):
             except discord.Forbidden:
                 await interaction.response.send_message(msg, ephemeral=True)
 
-        # -- /laq-setup  (Manage Channels + Manage Messages) --------------
+        # ── /laq-setup  (Manage Channels + Manage Messages) ────────────────
         @self.tree.command(
             name="laq-setup",
             description="[Server Admin Command] Create the TTR feed channels in this server and start tracking them.",
@@ -1185,7 +1192,7 @@ class TTRBot(discord.Client):
                 ephemeral=True,
             )
 
-        # -- /laq-refresh  (all users) -------------------------------------
+        # ── /laq-refresh  (all users, guild only) ──────────────────────────
         @self.tree.command(
             name="laq-refresh",
             description="[User Command] Force an immediate refresh of all TTR feeds and remove old messages.",
@@ -1204,7 +1211,6 @@ class TTRBot(discord.Client):
                     log.exception("Sweep failed for %s", interaction.guild.id)
                 if swept:
                     await self._save_state()
-            # Also refresh the suit-calculator static embeds (not on 90s loop).
             try:
                 await self._refresh_suit_calculator_all_guilds()
             except Exception:
@@ -1212,7 +1218,7 @@ class TTRBot(discord.Client):
             tail = f" Cleaned up {swept} old message(s)." if swept else ""
             await interaction.followup.send(f"Refreshed.{tail}", ephemeral=True)
 
-        # -- /laq-teardown  (Manage Channels + Manage Messages) -----------
+        # ── /laq-teardown  (Manage Channels + Manage Messages) ─────────────
         @self.tree.command(
             name="laq-teardown",
             description="[Server Admin Command] Stop TTR feed tracking. Channels are kept; delete them manually if needed.",
@@ -1234,7 +1240,6 @@ class TTRBot(discord.Client):
             )
             await interaction.response.send_message(msg, ephemeral=True)
 
-        # -- teardown logger -----------------------------------------------
         async def self_log_teardown(guild: discord.Guild, invoker: discord.abc.User) -> None:
             """Append one line to teardown_log.txt for every /laq-teardown."""
             try:
@@ -1263,10 +1268,11 @@ class TTRBot(discord.Client):
 
         self._log_teardown = self_log_teardown
 
-        # -- /calculate  (all users, guild + user install) ----------------
+        # ── /calculate  (all users, guild + user install) ──────────────────
         register_calculate(self)
 
 
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
     config = Config.load()

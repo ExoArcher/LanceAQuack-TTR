@@ -1,14 +1,15 @@
-# console.py
+# Console.py
 """
 Server hosting console command handler for LanceAQuack TTR.
 
 Reads commands from stdin (the Cybrancee hosting panel console).
 
-Available commands:
+Available commands
+------------------
     stop        -- Broadcasts a maintenance notice to all servers, then shuts the bot down.
     restart     -- Broadcasts a restarting notice to all servers, then hot-restarts the process.
-    maintenance -- Toggles maintenance mode on/off. Posts a banner in both
-                   #tt-information and #tt-doodles in every tracked server when on.
+    maintenance -- Toggles maintenance mode on/off. Posts a banner in #tt-information,
+                   #tt-doodles, and #suit-calculator in every tracked server when on.
     announce    -- Broadcast a message to every tracked server (auto-deletes in 30 min).
     help        -- List available console commands.
 """
@@ -29,6 +30,8 @@ import discord
 
 log = logging.getLogger("ttr-bot.console")
 
+# ── Constants ─────────────────────────────────────────────────────────────────
+
 HELP_TEXT = (
     "[console] Available commands:\n"
     "  stop           -- Notify all servers of maintenance, then shut down.\n"
@@ -41,13 +44,11 @@ HELP_TEXT = (
 _MAINT_MODE_FILE = Path(__file__).with_name("maintenance_mode.json")
 
 # How long (seconds) _readline_poll waits for stdin before returning None.
-# Kept short so the bot can notice it has closed within this many seconds.
+# Kept short so the bot can notice stdin has closed within this many seconds.
 _POLL_TIMEOUT = 2.0
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Console loop
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Console loop ──────────────────────────────────────────────────────────────
 
 async def run_console(bot) -> None:
     loop = asyncio.get_running_loop()
@@ -117,16 +118,14 @@ def _readline_poll() -> str | None:
     try:
         ready, _, _ = select.select([sys.stdin], [], [], _POLL_TIMEOUT)
         if not ready:
-            return ""          # timeout — no data yet
+            return ""           # timeout — no data yet
         line = sys.stdin.readline()
         return line if line else None   # empty string from readline() == EOF
     except Exception:
         return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Stop
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Stop ──────────────────────────────────────────────────────────────────────
 
 async def _handle_stop(bot) -> None:
     print("[console] STOP command received -- notifying servers and shutting down...", flush=True)
@@ -151,9 +150,7 @@ async def _handle_stop(bot) -> None:
     await bot.close()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Restart
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Restart ───────────────────────────────────────────────────────────────────
 
 async def _handle_restart(bot) -> None:
     print("[console] RESTART command received -- notifying servers and restarting...", flush=True)
@@ -180,22 +177,20 @@ async def _handle_restart(bot) -> None:
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Maintenance mode toggle
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Maintenance mode toggle ───────────────────────────────────────────────────
 
 async def _handle_maintenance(bot) -> None:
     """
     Toggle a persistent maintenance banner in #tt-information, #tt-doodles,
     and #suit-calculator for every tracked guild.
 
-    ON  -- sends the embed to both channels, stores message IDs in maintenance_mode.json.
+    ON  -- sends the embed to all three channels, stores message IDs in maintenance_mode.json.
     OFF -- deletes all stored banner messages and clears the file.
     """
     stored = _load_maint_mode()
 
     if stored:
-        # ── TURN OFF ──
+        # ── TURN OFF ──────────────────────────────────────────────────────
         print("[console] Maintenance mode OFF -- removing banners...", flush=True)
         log.info("[console] Maintenance mode disabling.")
         removed = 0
@@ -226,7 +221,7 @@ async def _handle_maintenance(bot) -> None:
         )
 
     else:
-        # ── TURN ON ──
+        # ── TURN ON ───────────────────────────────────────────────────────
         print("[console] Maintenance mode ON -- posting banners...", flush=True)
         log.info("[console] Maintenance mode enabling.")
 
@@ -282,9 +277,7 @@ async def _handle_maintenance(bot) -> None:
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Announce
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Announce ──────────────────────────────────────────────────────────────────
 
 async def _handle_announce(bot, text: str) -> None:
     """
@@ -314,9 +307,7 @@ async def _handle_announce(bot, text: str) -> None:
         print(f"[console] Announce failed: {exc}", flush=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# State helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ── State helpers ─────────────────────────────────────────────────────────────
 
 def _load_maint_mode() -> dict:
     try:
@@ -347,9 +338,7 @@ def _channel_id_for_feed(bot, guild_id_str: str, feed_key: str) -> int | None:
         return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Shared broadcast helper (info channel only -- used by stop / restart)
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Shared broadcast helper ───────────────────────────────────────────────────
 
 async def _broadcast_to_all_info_channels(bot, embed: discord.Embed) -> None:
     """Broadcast embed to all three managed channels in every tracked guild."""
