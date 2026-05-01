@@ -99,12 +99,12 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-import db
-from config import Config
-from formatters import FORMATTERS, format_doodles, format_information, format_sillymeter
-from ttr_api import TTRApiClient
-from Console import run_console, clear_maintenance_on_startup
-from calculate import register_calculate, build_suit_calculator_embeds, build_faction_thread_embeds
+from Features.Core.db import db
+from Features.Core.config.config import Config
+from Features.Core.formatters.formatters import FORMATTERS, format_doodles, format_information, format_sillymeter
+from Features.Core.ttr_api.ttr_api import TTRApiClient
+from Features.ServerManagement.console_commands.console_commands import run_console, clear_maintenance_on_startup
+from Features.User.calculate.calculate import register_calculate, build_suit_calculator_embeds, build_faction_thread_embeds
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
