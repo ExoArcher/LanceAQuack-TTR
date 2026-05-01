@@ -9,9 +9,22 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+import os as _os_for_dotenv
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path="/home/container/.env")
+# Try loading from multiple locations (Cybrancee root, then PDMain, then current dir)
+_dotenv_paths = [
+    "/home/container/.env",
+    "/home/container/PDMain/.env",
+    ".env"
+]
+for _path in _dotenv_paths:
+    if _os_for_dotenv.path.exists(_path):
+        load_dotenv(dotenv_path=_path)
+        break
+else:
+    # No .env found, still call load_dotenv to check environment variables
+    load_dotenv()
 
 
 def _required(name: str) -> str:
