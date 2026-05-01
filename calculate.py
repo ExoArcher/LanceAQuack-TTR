@@ -905,7 +905,7 @@ class _LevelSelect(discord.ui.Select):
                     f"\U0001f43e **{self.suit_name}{v2_tag}** at level {level_num} "
                     "is **Maxed** — nothing left to earn!"
                 ),
-                view=None,
+                view=_RestartView(),
             )
             return
         await interaction.response.send_modal(
@@ -928,6 +928,21 @@ class _NavButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:
         view, content = _make_level_view(self.abbr, self.suit_name, self.faction, self.is_v2, self.page)
         await interaction.response.edit_message(content=content, view=view)
+
+
+class _RestartView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=120)
+
+    @discord.ui.button(label="Calculate Again", style=discord.ButtonStyle.primary, emoji="🔄")
+    async def restart(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        view = _CalcView()
+        view.add_item(_FactionSelect())
+        await interaction.response.edit_message(
+            content="Choose your cog suit faction:",
+            embed=None,
+            view=view,
+        )
 
 
 class _PointsModal(discord.ui.Modal):
@@ -975,7 +990,7 @@ class _PointsModal(discord.ui.Modal):
                     "ready to rank up. \U0001f43e"
                 ),
                 embed=None,
-                view=None,
+                view=_RestartView(),
             )
             return
 
@@ -985,7 +1000,7 @@ class _PointsModal(discord.ui.Modal):
             self.suit_name, self.faction, self.level_num,
             current_pts, self.quota, self.is_v2, options,
         )
-        await interaction.response.edit_message(content=None, embed=embed, view=None)
+        await interaction.response.edit_message(content=None, embed=embed, view=_RestartView())
 
 
 # ── COMMAND REGISTRATION ──────────────────────────────────────────────────────
