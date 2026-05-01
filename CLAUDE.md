@@ -128,9 +128,9 @@ On first run, a one-time idempotent migration from legacy JSON files (`state.jso
 - `/helpme` — DMs you the full command list (ephemeral if DMs blocked).
 
 **Server admin commands** (require Manage Channels + Manage Messages):
-- `/pd-setup` — Creates category + 3 channels, posts placeholders, starts live tracking.
-- `/pd-refresh` — Force immediate data refresh, sweep stale messages.
-- `/pd-teardown` — Stop tracking this server (channels remain, no longer updated).
+- `/pdsetup` — Creates category + 3 channels, posts placeholders, starts live tracking.
+- `/pdrefresh` — Force immediate data refresh, sweep stale messages.
+- `/pdteardown` — Stop tracking this server (channels remain, no longer updated).
 
 **Console commands** (stdin on Cybrancee hosting panel, restricted to `BOT_ADMIN_IDS`):
 - `stop` — Notify all servers, then shut down gracefully.
