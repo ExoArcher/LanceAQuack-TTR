@@ -70,6 +70,8 @@ class Config:
     channel_information: str
     channel_doodles: str
     channel_suit_calculator: str
+    banned_user_ids: frozenset[int]
+    quarantined_guild_ids: frozenset[int]
 
     @classmethod
     def load(cls) -> "Config":
@@ -93,6 +95,12 @@ class Config:
             channel_doodles=os.getenv("CHANNEL_DOODLES", "tt-doodles"),
             channel_suit_calculator=os.getenv(
                 "CHANNEL_SUIT_CALCULATOR", "suit-calculator"
+            ),
+            banned_user_ids=_parse_id_list(
+                os.getenv("BANNED_USER_IDS"), var_name="BANNED_USER_IDS"
+            ),
+            quarantined_guild_ids=_parse_id_list(
+                os.getenv("QUARANTINED_GUILD_IDS"), var_name="QUARANTINED_GUILD_IDS"
             ),
         )
 

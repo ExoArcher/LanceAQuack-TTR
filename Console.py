@@ -34,12 +34,19 @@ log = logging.getLogger("ttr-bot.console")
 
 HELP_TEXT = (
     "[console] Available commands:\n"
-    "  stop           -- Notify all servers of maintenance, then shut down.\n"
-    "  restart        -- Notify all servers of a restart, then restart the process.\n"
-    "  maintenance / maint -- Toggle maintenance mode banner on/off in all server channels.\n"
-    "  announce <msg> -- Broadcast a message to every tracked server (auto-deletes in 30 min).\n"
-    "  rejoin         -- DM every server owner with a re-invite link, run teardown, then leave all servers.\n"
-    "  help           -- Show this list."
+    "  stop                       -- Notify all servers of maintenance, then shut down.\n"
+    "  restart                    -- Notify all servers of a restart, then restart the process.\n"
+    "  maintenance / maint        -- Toggle maintenance mode banner on/off in all server channels.\n"
+    "  announce <msg>             -- Broadcast a message to every tracked server (auto-deletes in 30 min).\n"
+    "  rejoin                     -- DM every server owner with a re-invite link, run teardown, then leave all servers.\n"
+    "  ban <user_id> [reason]     -- Ban a user by Discord ID (optionally with a reason).\n"
+    "  unban <user_id>            -- Remove a ban by Discord user ID.\n"
+    "  banlist                    -- Print the full ban list to stdout.\n"
+    "  quarantine <guild_id> [reason]   -- Manually quarantine a guild by ID.\n"
+    "  unquarantine <guild_id>    -- Lift quarantine from a guild by ID.\n"
+    "  quarantine-list            -- Print all currently quarantined guilds.\n"
+    "  quarantine-refresh [guild_id]    -- Force an immediate quarantine scan (all guilds or one).\n"
+    "  help                       -- Show this list."
 )
 
 _INVITE_LINK = (
@@ -110,6 +117,55 @@ async def run_console(bot) -> None:
         elif cmd == "rejoin":
             await _handle_rejoin(bot)
             break
+
+        elif cmd.startswith("ban ") or cmd == "ban":
+            parts = line.strip().split(None, 2)
+            if len(parts) < 2 or not parts[1].strip().isdigit():
+                print("[console] Usage: ban <user_id> [reason]", flush=True)
+            else:
+                uid = int(parts[1].strip())
+                reason = parts[2].strip() if len(parts) > 2 else "Banned via console"
+                await _handle_ban(bot, uid, reason)
+
+        elif cmd.startswith("unban ") or cmd == "unban":
+            parts = line.strip().split(None, 1)
+            if len(parts) < 2 or not parts[1].strip().isdigit():
+                print("[console] Usage: unban <user_id>", flush=True)
+            else:
+                uid = int(parts[1].strip())
+                await _handle_unban(bot, uid)
+
+        elif cmd == "banlist":
+            _handle_banlist(bot)
+
+        elif cmd.startswith("quarantine ") or cmd == "quarantine":
+            parts = line.strip().split(None, 2)
+            if len(parts) < 2 or not parts[1].strip().isdigit():
+                print("[console] Usage: quarantine <guild_id> [reason]", flush=True)
+            else:
+                gid = int(parts[1].strip())
+                reason = parts[2].strip() if len(parts) > 2 else "Manually quarantined via console"
+                await _handle_quarantine(bot, gid, reason)
+
+        elif cmd.startswith("unquarantine ") or cmd == "unquarantine":
+            parts = line.strip().split(None, 1)
+            if len(parts) < 2 or not parts[1].strip().isdigit():
+                print("[console] Usage: unquarantine <guild_id>", flush=True)
+            else:
+                gid = int(parts[1].strip())
+                await _handle_unquarantine(bot, gid)
+
+        elif cmd == "quarantine-list":
+            _handle_quarantine_list(bot)
+
+        elif cmd.startswith("quarantine-refresh"):
+            parts = line.strip().split(None, 1)
+            raw_gid = parts[1].strip() if len(parts) > 1 else ""
+            if raw_gid and not raw_gid.isdigit():
+                print("[console] Usage: quarantine-refresh [guild_id]", flush=True)
+            else:
+                target = int(raw_gid) if raw_gid else None
+                await _handle_quarantine_refresh(bot, target)
 
         else:
             print(f"[console] Unknown command: '{cmd}'.\n{HELP_TEXT}", flush=True)
@@ -493,5 +549,82 @@ async def _broadcast_to_all_info_channels(bot, embed: discord.Embed) -> None:
     print(
         f"[console] Broadcast complete -- {sent} message(s) across all channels, "
         f"{failed} failed.",
+        flush=True,
+    )
+
+
+# ── Ban management ────────────────────────────────────────────────────────────
+
+async def _handle_ban(bot, user_id: int, reason: str) -> None:
+    banned_by = "console"
+    await bot._ban_user(user_id, reason, banned_by, 0)
+    print(f"[console] Banned user {user_id}: {reason!r}", flush=True)
+
+
+async def _handle_unban(bot, user_id: int) -> None:
+    removed = bot._unban_user(user_id)
+    if removed:
+        print(f"[console] Unbanned user {user_id}.", flush=True)
+    else:
+        print(f"[console] User {user_id} was not in the ban list.", flush=True)
+
+
+def _handle_banlist(bot) -> None:
+    banned = bot._load_banned()
+    if not banned:
+        print("[console] Ban list is empty.", flush=True)
+        return
+    print(f"[console] Banned users ({len(banned)}):", flush=True)
+    for uid, record in banned.items():
+        reason = record.get("reason", "—")
+        banned_at = record.get("banned_at", "unknown")
+        banned_by = record.get("banned_by", "unknown")
+        print(f"  {uid}  |  {reason}  |  banned {banned_at} by {banned_by}", flush=True)
+
+
+# ── Quarantine management ─────────────────────────────────────────────────────
+
+async def _handle_quarantine(bot, guild_id: int, reason: str) -> None:
+    if bot._is_quarantined(guild_id):
+        print(f"[console] Guild {guild_id} is already quarantined.", flush=True)
+        return
+    await bot._quarantine_guild(guild_id, 0, manual=True)
+    print(f"[console] Quarantined guild {guild_id}: {reason!r}", flush=True)
+
+
+async def _handle_unquarantine(bot, guild_id: int) -> None:
+    if not bot._is_quarantined(guild_id):
+        print(f"[console] Guild {guild_id} is not quarantined.", flush=True)
+        return
+    await bot._lift_quarantine(guild_id)
+    print(f"[console] Lifted quarantine from guild {guild_id}.", flush=True)
+
+
+def _handle_quarantine_list(bot) -> None:
+    quarantined = bot._quarantined_guilds()
+    if not quarantined:
+        print("[console] No guilds are currently quarantined.", flush=True)
+        return
+    print(f"[console] Quarantined guilds ({len(quarantined)}):", flush=True)
+    for gid_str, record in quarantined.items():
+        guild = bot.get_guild(int(gid_str))
+        name = guild.name if guild else f"<unknown guild>"
+        triggered_by = record.get("triggered_by_user_id", 0)
+        triggered_at = record.get("triggered_at", 0)
+        manual = record.get("manual", False)
+        ts = datetime.fromtimestamp(triggered_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        kind = "manual" if manual else f"auto (banned user {triggered_by})"
+        print(f"  {gid_str}  |  {name}  |  {kind}  |  since {ts}", flush=True)
+
+
+async def _handle_quarantine_refresh(bot, guild_id: int | None) -> None:
+    print(
+        f"[console] Running quarantine scan{f' for guild {guild_id}' if guild_id else ' for all guilds'}...",
+        flush=True,
+    )
+    result = await bot._run_quarantine_scan(target_guild_id=guild_id)
+    print(
+        f"[console] Quarantine scan complete — {result['scanned']} guild(s) scanned, "
+        f"{result['quarantined']} newly quarantined, {result['lifted']} lifted.",
         flush=True,
     )
