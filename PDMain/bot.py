@@ -228,15 +228,8 @@ class TTRBot(discord.AutoShardedClient):
         await self._api.__aenter__()
         print("[API Client] Loaded successfully", flush=True)
 
-        # Push an empty global command list to Discord, wiping any stale
-        # global commands (ttr_refresh, pd_guild_add, etc.).
-        self.tree.clear_commands(guild=None)
-        await self.tree.sync()
-
-        # Register the current commands in memory only.
-        # They will be synced per-guild in on_ready / on_guild_join,
-        # which prevents Discord from showing global + guild duplicates.
         self._register_commands()
+        await self.tree.sync()
         print("[Commands] Registered successfully", flush=True)
 
     async def close(self) -> None:
@@ -274,12 +267,10 @@ class TTRBot(discord.AutoShardedClient):
                 log.info("Pruning state for departed guild %s", gid)
                 self._guilds_block().pop(gid, None)
 
-        # Per-guild command sync: clears old names and registers new ones.
         for guild in list(self.guilds):
             if not self.is_guild_allowed(guild.id):
                 continue
-            await self._sync_commands_to_guild(guild)
-            print(f"[{guild.name}] [{guild.id}] Joined Successfully", flush=True)
+            log.info("Tracking guild %s (id=%s)", guild.name, guild.id)
 
         await self._cleanup_maintenance_msgs()
         print("[Maintenance Cleanup] Loaded successfully", flush=True)
@@ -309,7 +300,6 @@ class TTRBot(discord.AutoShardedClient):
             await self._notify_and_leave(guild)
             return
         log.info("Joined allowlisted guild %s (id=%s)", guild.name, guild.id)
-        await self._sync_commands_to_guild(guild)
 
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         log.info("Removed from guild %s (id=%s)", guild.name, guild.id)
@@ -317,17 +307,6 @@ class TTRBot(discord.AutoShardedClient):
         await self._save_state()
 
     # ── GUILD ACCESS ──────────────────────────────────────────────────────────
-
-    async def _sync_commands_to_guild(self, guild: discord.Guild) -> None:
-        """Aggressively wipe all old per-guild commands then push the new set."""
-        try:
-            self.tree.clear_commands(guild=guild)
-            await self.tree.sync(guild=guild)
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            log.info("Command sync OK for %s (id=%s)", guild.name, guild.id)
-        except Exception:
-            log.exception("Command sync failed for %s (id=%s)", guild.name, guild.id)
 
     async def _notify_and_leave(self, guild: discord.Guild) -> None:
         """DM the guild owner the closed-access message, then leave."""
@@ -1050,8 +1029,6 @@ class TTRBot(discord.AutoShardedClient):
             name="ttrinfo",
             description="[User Command] See current Toontown district, invasion, field office, and Silly Meter info.",
         )
-        @app_commands.allowed_installs(guilds=True, users=True)
-        @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
         async def ttrinfo(interaction: discord.Interaction) -> None:
             if await self._reject_if_banned(interaction):
                 return
@@ -1090,8 +1067,6 @@ class TTRBot(discord.AutoShardedClient):
             name="doodleinfo",
             description="[User Command] See the current Toontown doodle list with trait ratings.",
         )
-        @app_commands.allowed_installs(guilds=True, users=True)
-        @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
         async def doodleinfo(interaction: discord.Interaction) -> None:
             if await self._reject_if_banned(interaction):
                 return
@@ -1116,8 +1091,6 @@ class TTRBot(discord.AutoShardedClient):
             name="helpme",
             description="[User Command] Show available commands for the Paws Pendragon app.",
         )
-        @app_commands.allowed_installs(guilds=True, users=True)
-        @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
         async def help_me(interaction: discord.Interaction) -> None:
             if await self._reject_if_banned(interaction):
                 return
@@ -1150,13 +1123,8 @@ class TTRBot(discord.AutoShardedClient):
                 inline=False,
             )
             embed.add_field(
-                name="/invite-app",
-                value="Add Paws Pendragon TTR to your personal Discord account.",
-                inline=False,
-            )
-            embed.add_field(
-                name="/invite-server",
-                value="Add Paws Pendragon TTR to a Discord server.",
+                name="/pdinvite",
+                value="Get links to add the bot to a server or your personal account.",
                 inline=False,
             )
             embed.add_field(
@@ -1170,94 +1138,45 @@ class TTRBot(discord.AutoShardedClient):
             except discord.Forbidden:
                 await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        # ── /invite-app  (all users, guild + user install) ─────────────────
-        @self.tree.command(
-            name="invite-app",
-            description="[User Command] Add Paws Pendragon TTR to your personal Discord account.",
-        )
-        @app_commands.allowed_installs(guilds=True, users=True)
-        @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-        async def invite_app(interaction: discord.Interaction) -> None:
-            if await self._reject_if_banned(interaction):
-                return
-            link = (
-                "https://discord.com/oauth2/authorize"
-                "?client_id=1496971496709689654"
-                "&integration_type=1"
-                "&scope=applications.commands"
+        # ── /pdinvite  (all users) ──────────────────────────────────────────
+        @self.tree.command(name="pdinvite", description="Get links to invite Paws Pendragon")
+        async def pdinvite(interaction: discord.Interaction) -> None:
+            await self._reject_if_banned(interaction)
+            bot_id = self.user.id if self.user else "1496971496709689654"
+            server_link = (
+                f"https://discord.com/oauth2/authorize"
+                f"?client_id={bot_id}"
+                f"&permissions=7318489585232976"
+                f"&scope=bot+applications.commands"
             )
-            msg = (
-                f":link: **Add Paws Pendragon TTR to your Discord account**\n"
-                f"{link}\n"
-                f"​\n"
-                f"**About the bot**\n"
-                f"Paws Pendragon TTR is a Toontown Rewritten companion bot. "
-                f"It delivers live game data -- district populations, cog invasions, "
-                f"active field offices, Silly Meter status, and the full doodle guide -- "
-                f"directly to your DMs from anywhere in Discord.\n"
-                f"​\n"
-                f"**Permissions requested**\n"
-                f"This is a **User App install** -- it does **not** join your server and "
-                f"requires **no server permissions**. "
-                f"It adds the slash commands `/ttrinfo`, `/doodleinfo`, `/calculate`, "
-                f"`/beanfest`, `/helpme`, `/invite-app`, and `/invite-server` to your "
-                f"personal Discord account, usable in any server, DM, or group chat."
+            user_app_link = (
+                f"https://discord.com/oauth2/authorize"
+                f"?client_id={bot_id}"
+                f"&integration_type=1"
+                f"&scope=applications.commands"
+            )
+            embed = discord.Embed(title="🐾 Invite Paws Pendragon", color=0x9124F2)
+            embed.add_field(
+                name="Add to Server",
+                value=f"[Click here to invite]({server_link})",
+                inline=False,
+            )
+            embed.add_field(
+                name="Add as User App",
+                value=f"[Click here to install]({user_app_link})",
+                inline=False,
             )
             try:
-                await interaction.user.send(msg)
-                await interaction.response.send_message("Check your DMs! :mailbox_with_mail:", ephemeral=True)
+                await interaction.user.send(embed=embed)
+                await interaction.response.send_message("Check your DMs!", ephemeral=True)
             except discord.Forbidden:
-                await interaction.response.send_message(msg, ephemeral=True)
-
-        # ── /invite-server  (all users, guild + user install) ──────────────
-        @self.tree.command(
-            name="invite-server",
-            description="[User Command] Add Paws Pendragon TTR to a Discord server.",
-        )
-        @app_commands.allowed_installs(guilds=True, users=True)
-        @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-        async def invite_server(interaction: discord.Interaction) -> None:
-            if await self._reject_if_banned(interaction):
-                return
-            link = (
-                "https://discord.com/oauth2/authorize"
-                "?client_id=1496971496709689654"
-                "&permissions=7318489585232976"
-                "&scope=bot+applications.commands"
-            )
-            msg = (
-                f":link: **Add Paws Pendragon TTR to a server**\n"
-                f"{link}\n"
-                f"​\n"
-                f"**About the bot**\n"
-                f"Paws Pendragon TTR is a Toontown Rewritten companion bot. "
-                f"When added to a server it automatically creates a **#tt-information** "
-                f"channel and a **#tt-doodles** channel. These are kept up to date "
-                f"with live TTR data: district populations, cog invasions, field offices, "
-                f"the Silly Meter, and the full doodle buying guide.\n"
-                f"​\n"
-                f"**Permissions requested**\n"
-                f"• **Manage Channels** -- create the `#tt-information` and `#tt-doodles` channels on setup.\n"
-                f"• **Send Messages** -- post live game data into those channels.\n"
-                f"• **Manage Messages** -- edit and clean up its own posts as data updates.\n"
-                f"• **Embed Links** -- display rich embeds with formatted game information.\n"
-                f"• **Read Message History** -- locate and update previously posted embeds.\n"
-                f"• **View Channels** -- see the channels it manages.\n"
-                f"\nThe bot does **not** read general chat messages and only operates in the channels it creates."
-            )
-            try:
-                await interaction.user.send(msg)
-                await interaction.response.send_message("Check your DMs! :mailbox_with_mail:", ephemeral=True)
-            except discord.Forbidden:
-                await interaction.response.send_message(msg, ephemeral=True)
+                await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # ── /beanfest  (all users, guild + user install) ─────────────────
         @self.tree.command(
             name="beanfest",
             description="[User Command] View the weekly Beanfest schedule. Events are community-run and subject to change.",
         )
-        @app_commands.allowed_installs(guilds=True, users=True)
-        @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
         async def beanfest(interaction: discord.Interaction) -> None:
             if await self._reject_if_banned(interaction):
                 return
