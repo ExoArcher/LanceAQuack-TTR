@@ -6,11 +6,11 @@ Multi-guild Discord bot that mirrors the public Toontown Rewritten APIs into liv
 
 ## Channels each server gets
 
-After an admin runs `/pd-setup`:
+After an admin runs `/pdsetup`:
 
 - **`#tt-information`** — live district populations, cog invasions (type, progress, mega flag), active Field Offices (department, difficulty, annexes remaining, open/closed status), and the global Silly Meter (teams, accumulated points, percentage full).
 - **`#tt-doodles`** — every doodle currently for sale across all playgrounds, with trait ratings and a tiered buying guide. Only doodles meeting the Good threshold or above are shown.
-- **`#suit-calculator`** — 4 pinned static embeds showing the full point tables for all cog suit disguises (Sellbot, Cashbot, Lawbot, Bossbot), including 2.0 suit variants. Updated on startup and `/pd-refresh`, not on the 90-second loop.
+- **`#suit-calculator`** — 4 pinned static embeds showing the full point tables for all cog suit disguises (Sellbot, Cashbot, Lawbot, Bossbot), including 2.0 suit variants. Updated on startup and `/pdrefresh`, not on the 90-second loop.
 
 Both channels are kept clean: one pinned embed per section, edited in place on a timer. Stale bot messages are swept automatically every 15 minutes.
 
@@ -34,9 +34,9 @@ Require **Manage Channels** and **Manage Messages**.
 
 | Command | Description |
 |---|---|
-| `/pd-setup` | Create `#tt-information` and `#tt-doodles` channels and start live tracking for this server. |
-| `/pd-refresh` | Force an immediate data refresh and sweep stale messages. |
-| `/pd-teardown` | Stop tracking this server. Channels are kept but no longer updated. |
+| `/pdsetup` | Create `#tt-information` and `#tt-doodles` channels and start live tracking for this server. |
+| `/pdrefresh` | Force an immediate data refresh and sweep stale messages. |
+| `/pdteardown` | Stop tracking this server. Channels are kept but no longer updated. |
 
 ### Console commands
 Typed directly into the Cybrancee hosting panel console (stdin).
@@ -71,7 +71,7 @@ Use `/invite` to get the install links for personal accounts and servers.
 
 **Ban system** — the ban list in `banned_users.json` blocks abusive users from all commands by Discord ID. Banned users receive an ephemeral rejection message on every blocked attempt. Records store the reason, timestamp, and banning admin. Edit `banned_users.json` directly to add or remove entries.
 
-**Teardown logging** — every `/pd-teardown` is appended to `teardown_log.txt` with the guild ID, server name, owner name, owner ID, and the user who invoked it.
+**Teardown logging** — every `/pdteardown` is appended to `teardown_log.txt` with the guild ID, server name, owner name, owner ID, and the user who invoked it.
 
 ---
 
@@ -109,7 +109,7 @@ For full setup instructions see **`DEPLOY.md`**.
 | `state.json` | Per-guild channel and message ID tracking. Auto-created. **Do not delete while running.** |
 | `welcomed_users.json` | Tracks which users have received the first-use welcome DM. Auto-created. |
 | `banned_users.json` | Stores ban records (ID, reason, timestamp, banning admin). Auto-created. |
-| `teardown_log.txt` | Append-only log of every `/pd-teardown` event. Auto-created. |
+| `teardown_log.txt` | Append-only log of every `/pdteardown` event. Auto-created. |
 | `.env.example` | Template config — safe to commit. Fill values into `.env`. |
 | `.env` | Your real secrets — **never commit this file.** |
 | `.gitignore` | Keeps `.env`, `state.json`, and pyc out of git. |
@@ -120,9 +120,9 @@ For full setup instructions see **`DEPLOY.md`**.
 ## Version history
 
 **V1.4** — Current release.
-- **`#suit-calculator` static channel** — 4 pinned embeds (one per faction) showing the full promotion point tables for every cog suit level, including 2.0 variants. Posted/edited on startup and `/pd-refresh`; not on the 90-second loop.
-- `/pd-setup` now creates `#suit-calculator` alongside `#tt-information` and `#tt-doodles`.
-- `/pd-refresh` now also refreshes the suit-calculator embeds.
+- **`#suit-calculator` static channel** — 4 pinned embeds (one per faction) showing the full promotion point tables for every cog suit level, including 2.0 variants. Posted/edited on startup and `/pdrefresh`; not on the 90-second loop.
+- `/pdsetup` now creates `#suit-calculator` alongside `#tt-information` and `#tt-doodles`.
+- `/pdrefresh` now also refreshes the suit-calculator embeds.
 
 **V1.3**
 - `/calculate <suit> <level> <current_points>` — suit disguise point calculator for all 4 factions. Accepts full names or abbreviations; handles 2.0 suits (`RB2.0`, `TBC2.0`, etc.). Returns points still needed and ranked activity recommendations with per-run yield ranges.
@@ -145,7 +145,7 @@ For full setup instructions see **`DEPLOY.md`**.
 - Rate limit protection: 3-second sleep between embed edits.
 
 **V1.0** — Cybrancee hosting edition.
-- Multi-guild rewrite with `/pd-setup`, allowlist enforcement, and per-guild message persistence.
+- Multi-guild rewrite with `/pdsetup`, allowlist enforcement, and per-guild message persistence.
 - Doodle tier guide with trait ratings.
 - District, invasion, and field office live embeds.
 - Panel announcement support via `panel_announce.txt`.
