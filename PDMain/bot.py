@@ -59,6 +59,19 @@ _BOT_DIR = _os.path.dirname(_os.path.abspath(__file__))
 _sys.path.insert(0, _BOT_DIR)
 _GIT_REPO = "https://github.com/ExoArcher/PawsPendragon-TTR"
 
+def _find_repo_dir(start: str) -> str:
+    """Find the nearest git checkout at or above *start*."""
+    current = _os.path.abspath(start)
+    while True:
+        if _os.path.isdir(_os.path.join(current, ".git")):
+            return current
+        parent = _os.path.dirname(current)
+        if parent == current:
+            return start
+        current = parent
+
+_REPO_DIR = _find_repo_dir(_BOT_DIR)
+
 def _clear_bytecode_cache(_path: str) -> None:
     """Recursively delete all __pycache__ directories to force bytecode recompile."""
     try:
@@ -76,34 +89,34 @@ _AUTO_UPDATE = _os.getenv("AUTO_UPDATE", "true").lower() in ("true", "1", "yes")
 
 if _AUTO_UPDATE:
     try:
-        if not _os.path.isdir(_os.path.join(_BOT_DIR, ".git")):
+        if not _os.path.isdir(_os.path.join(_REPO_DIR, ".git")):
             print("[auto-update] No .git found -- initialising repo from GitHub...", flush=True)
-            _subprocess.run(["git", "init"],                                cwd=_BOT_DIR, check=True, capture_output=True)
-            _subprocess.run(["git", "remote", "add", "origin", _GIT_REPO],  cwd=_BOT_DIR, check=True, capture_output=True)
-            _subprocess.run(["git", "fetch", "origin", "main"],              cwd=_BOT_DIR, check=True, capture_output=True)
+            _subprocess.run(["git", "init"],                                cwd=_REPO_DIR, check=True, capture_output=True)
+            _subprocess.run(["git", "remote", "add", "origin", _GIT_REPO],  cwd=_REPO_DIR, check=True, capture_output=True)
+            _subprocess.run(["git", "fetch", "origin", "main"],              cwd=_REPO_DIR, check=True, capture_output=True)
             _subprocess.run(["git", "checkout", "-b", "main", "--track", "origin/main"],
-                            cwd=_BOT_DIR, check=True, capture_output=True)
+                            cwd=_REPO_DIR, check=True, capture_output=True)
             print("[auto-update] Repo initialised. Restarting with GitHub code...", flush=True)
             _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
         else:
             # Compare local HEAD vs remote to avoid infinite restart loop.
             _subprocess.run(["git", "fetch", "origin", "main"],
-                            cwd=_BOT_DIR, check=True, capture_output=True)
+                            cwd=_REPO_DIR, check=True, capture_output=True)
             _local  = _subprocess.run(["git", "rev-parse", "HEAD"],
-                                      cwd=_BOT_DIR, capture_output=True, text=True).stdout.strip()
+                                      cwd=_REPO_DIR, capture_output=True, text=True).stdout.strip()
             _remote = _subprocess.run(["git", "rev-parse", "origin/main"],
-                                      cwd=_BOT_DIR, capture_output=True, text=True).stdout.strip()
+                                      cwd=_REPO_DIR, capture_output=True, text=True).stdout.strip()
             if _local != _remote:
                 try:
                     # Use --ff-only to safely merge only if fast-forward is possible
                     _subprocess.run(["git", "pull", "--ff-only", "origin", "main"],
-                                    cwd=_BOT_DIR, check=True, capture_output=True)
+                                    cwd=_REPO_DIR, check=True, capture_output=True)
                 except _subprocess.CalledProcessError:
                     # History diverged; warn and continue with existing code
                     print(f"[auto-update] WARNING: Cannot fast-forward ({_local[:7]} vs {_remote[:7]}). History may have diverged. Continuing with existing code.", flush=True)
                 else:
                     # Clear bytecode cache to force recompilation of all modules
-                    _clear_bytecode_cache(_BOT_DIR)
+                    _clear_bytecode_cache(_REPO_DIR)
                     print(f"[auto-update] Updated {_local[:7]} -> {_remote[:7]}. Cleared bytecode cache. Restarting...", flush=True)
                     _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
             else:
