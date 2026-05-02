@@ -130,8 +130,11 @@ def register_doodlesearch(bot: TTRBot) -> None:
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         thread_name = f"{interaction.user.display_name}'s Search {now_str}"
 
+        # Fetch the actual channel object from the cache
+        channel = bot.get_channel(interaction.channel.id) if interaction.channel else None
+        
         # If it's a guild text channel, we can create a thread
-        if isinstance(interaction.channel, discord.TextChannel):
+        if isinstance(channel, discord.TextChannel):
             try:
                 # We send the initial message to fulfill the interaction
                 await interaction.followup.send(
@@ -139,7 +142,7 @@ def register_doodlesearch(bot: TTRBot) -> None:
                 )
                 
                 # Create a standalone thread in the channel
-                thread = await interaction.channel.create_thread(
+                thread = await channel.create_thread(
                     name=thread_name[:100],
                     type=discord.ChannelType.public_thread,
                     auto_archive_duration=60
@@ -161,7 +164,7 @@ def register_doodlesearch(bot: TTRBot) -> None:
             except Exception as e:
                 log.error("Failed to create thread or send embeds: %s", e)
                 # Fallback: just send the embeds in the channel
-                await interaction.channel.send(embeds=embeds)
+                await channel.send(embeds=embeds)
         else:
             # Fallback for DMs, existing threads, or non-text channels
             msg = await interaction.followup.send(
