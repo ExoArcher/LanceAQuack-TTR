@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -9,6 +11,42 @@ if TYPE_CHECKING:
     from bot import TTRBot
 
 log = logging.getLogger("ttr-bot.doodlesearch")
+
+
+async def _resolve_doodles_channel(
+    bot: TTRBot,
+    interaction: discord.Interaction,
+) -> discord.TextChannel | None:
+    """Return the configured #tt-doodles channel for this guild, if available."""
+    guild = interaction.guild
+    if guild is None:
+        return None
+
+    guild_state = bot._guild_state(guild.id)
+    doodles_entry = guild_state.get("doodles", {})
+    channel_id = 0
+    if isinstance(doodles_entry, dict):
+        try:
+            channel_id = int(doodles_entry.get("channel_id", 0))
+        except (TypeError, ValueError):
+            channel_id = 0
+
+    if channel_id:
+        channel = bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await guild.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                channel = None
+        if isinstance(channel, discord.TextChannel):
+            return channel
+
+    channel_name = bot.config.feeds().get("doodles", bot.config.channel_doodles)
+    channel = discord.utils.get(guild.text_channels, name=channel_name)
+    if isinstance(channel, discord.TextChannel):
+        return channel
+
+    return None
 
 
 def register_doodlesearch(bot: TTRBot) -> None:
@@ -130,26 +168,24 @@ def register_doodlesearch(bot: TTRBot) -> None:
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         thread_name = f"{interaction.user.display_name}'s Search {now_str}"
 
-        # Fetch the actual channel object from the cache
-        channel = bot.get_channel(interaction.channel.id) if interaction.channel else None
+        # Search results should live under the tracked doodles feed channel,
+        # regardless of where the slash command was invoked.
+        channel = await _resolve_doodles_channel(bot, interaction)
         
-        # If it's a guild text channel, we can create a thread
-        if isinstance(channel, discord.TextChannel):
+        if channel is not None:
             try:
-                # We send the initial message to fulfill the interaction
-                await interaction.followup.send(
-                    content=f"Found {len(top_results)} doodles! I'm creating a thread for the results..."
-                )
-                
-                # Create a standalone thread in the channel
                 thread = await channel.create_thread(
                     name=thread_name[:100],
                     type=discord.ChannelType.public_thread,
                     auto_archive_duration=60
                 )
-                
-                # Send the embeds into the thread
                 await thread.send(content="Here are the top results:", embeds=embeds)
+                await interaction.followup.send(
+                    content=(
+                        f"Found {len(top_results)} doodles! "
+                        f"I posted the results in {thread.mention} under {channel.mention}."
+                    )
+                )
                 
                 # Schedule auto-deletion of the thread after 10 minutes (600 seconds)
                 import asyncio
@@ -161,10 +197,24 @@ def register_doodlesearch(bot: TTRBot) -> None:
                         pass
                         
                 asyncio.create_task(delete_thread_later())
-            except Exception as e:
-                log.error("Failed to create thread or send embeds: %s", e)
-                # Fallback: just send the embeds in the channel
-                await channel.send(embeds=embeds)
+            except discord.Forbidden:
+                log.warning("No permission to create/send doodlesearch thread in #%s", channel.name)
+                await interaction.followup.send(
+                    content=(
+                        f"I found {len(top_results)} doodles, but I don't have permission "
+                        f"to create or post in threads under {channel.mention}."
+                    ),
+                    embeds=embeds,
+                )
+            except discord.HTTPException as e:
+                log.error("Failed to create doodlesearch thread in #%s: %s", channel.name, e)
+                await interaction.followup.send(
+                    content=(
+                        f"I found {len(top_results)} doodles, but Discord would not let me "
+                        f"create the results thread in {channel.mention}."
+                    ),
+                    embeds=embeds,
+                )
         else:
             # Fallback for DMs, existing threads, or non-text channels
             msg = await interaction.followup.send(
