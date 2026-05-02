@@ -10,61 +10,17 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("ttr-bot.doodlesearch")
 
-# Classic and TTR Doodle Colors mapped from hex bytes
-TTR_COLORS = {
-    "00": "White",
-    "01": "Peach",
-    "02": "Red",
-    "03": "Orange",
-    "04": "Yellow",
-    "05": "Green",
-    "06": "Light Blue",
-    "07": "Blue",
-    "08": "Purple",
-    "09": "Brown",
-    "0a": "Black",
-    "0b": "Pink",
-    "0c": "Dark Green",
-    "0d": "Teal",
-    "0e": "Magenta",
-    "0f": "Crimson",
-    "10": "Sea Green",
-    "11": "Mint",
-    "12": "Lavender",
-    "13": "Salmon",
-    "14": "Periwinkle",
-    "15": "Steel Blue",
-    "16": "Forest Green",
-    "17": "Coral",
-    "18": "Navy",
-    "19": "Plum",
-    "1a": "Indigo",
-    "ff": "Default/Pattern",
-}
-
-def get_doodle_colors(dna: str) -> list[str]:
-    """Parse the DNA string (20 hex chars) for color traits.
-    Bytes 2, 3, and 4 (indices 4:6, 6:8, 8:10) represent head, body, and legs colors.
-    """
-    if not dna or len(dna) < 10:
-        return []
-    
-    colors = set()
-    for i in range(4, 10, 2):
-        hex_byte = dna[i:i+2].lower()
-        if hex_byte in TTR_COLORS and hex_byte != "ff":
-            colors.add(TTR_COLORS[hex_byte])
-    return list(colors)
-
 
 def register_doodlesearch(bot: TTRBot) -> None:
     @bot.tree.command(
         name="doodlesearch",
-        description="Search for specific doodles by trait, color, or location.",
+        description="Search for specific doodles by traits or location.",
     )
     @app_commands.describe(
-        trait="Filter by a specific trait (e.g., 'Rarely Tired', 'Always Playful')",
-        color="Filter by color (e.g., 'Red', 'Blue', 'Purple')",
+        trait1="Filter by a specific trait (e.g., 'Rarely Tired', 'Always Playful')",
+        trait2="Filter by a second trait",
+        trait3="Filter by a third trait",
+        trait4="Filter by a fourth trait",
         playground="Filter by a playground (e.g., 'Donald\\'s Dreamland')",
         district="Filter by a district (e.g., 'Splat Summit')"
     )
@@ -72,8 +28,10 @@ def register_doodlesearch(bot: TTRBot) -> None:
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def doodlesearch(
         interaction: discord.Interaction, 
-        trait: str = None, 
-        color: str = None,
+        trait1: str = None, 
+        trait2: str = None,
+        trait3: str = None,
+        trait4: str = None,
         playground: str = None,
         district: str = None
     ) -> None:
@@ -100,6 +58,8 @@ def register_doodlesearch(bot: TTRBot) -> None:
         # Flatten and filter the doodles
         from Features.Core.formatters.formatters import doodle_priority, doodle_quality, PRIORITY_REST, JELLYBEAN_EMOJI, star_for
 
+        search_traits = [t.lower() for t in (trait1, trait2, trait3, trait4) if t]
+        
         results = []
         for dist, playgrounds in (doodle_data or {}).items():
             if district and district.lower() not in dist.lower():
@@ -113,21 +73,23 @@ def register_doodlesearch(bot: TTRBot) -> None:
                     traits = d.get("traits") or []
                     dna = d.get("dna", "")
                     
-                    # Filter by Trait
-                    if trait:
-                        if not any(trait.lower() in t.lower() for t in traits):
-                            continue
-                    
-                    # Filter by Color
-                    if color:
-                        dna_colors = get_doodle_colors(dna)
-                        if not any(color.lower() in c.lower() for c in dna_colors):
+                    # Filter by all provided traits
+                    if search_traits:
+                        # Ensure every requested trait exists in the doodle's traits
+                        doodle_traits_lower = [t.lower() for t in traits]
+                        missing_trait = False
+                        for st in search_traits:
+                            # Substring match (e.g. "rarely tired" matches "Rarely Tired")
+                            if not any(st in dt for dt in doodle_traits_lower):
+                                missing_trait = True
+                                break
+                        if missing_trait:
                             continue
 
                     results.append((dist, pg, traits, d.get("cost", "?"), dna))
 
         # Drop "REST" tier doodles if we have a lot of results, unless specifically searching for bad ones
-        if len(results) > 5 and not trait:
+        if len(results) > 7 and not search_traits:
             results = [r for r in results if doodle_priority(r[2]) != PRIORITY_REST]
 
         # Sort by best traits
@@ -138,8 +100,8 @@ def register_doodlesearch(bot: TTRBot) -> None:
             r[1].lower(),
         ))
 
-        # Take Top 5
-        top_results = results[:5]
+        # Take Top 7
+        top_results = results[:7]
 
         if not top_results:
             await interaction.followup.send("No doodles found matching those criteria.", ephemeral=True)
@@ -157,27 +119,58 @@ def register_doodlesearch(bot: TTRBot) -> None:
             
             title_text = f"[{stars}] [{trait_str}] [{dist} · {pg}] [{JELLYBEAN_EMOJI} {cost}]"
             embed.description = f"**{title_text}**"
-            
-            # Display colors if known
-            colors = get_doodle_colors(dna)
-            if colors:
-                embed.set_footer(text=f"Colors: {', '.join(colors)}")
                 
             # Render image
             image_url = f"https://rendition.toontownrewritten.com/render/{dna}/doodle/256x256.png"
             embed.set_image(url=image_url)
             embeds.append(embed)
 
-        # Send response and auto-delete after 10 minutes (600 seconds)
-        msg = await interaction.followup.send(
-            content=f"Here are the top {len(top_results)} doodles matching your search:",
-            embeds=embeds,
-            wait=True
-        )
-        
-        # Schedule auto-deletion
-        try:
+        # Generate thread name
+        trait_names = "".join([f" <{t.title()}>" for t in (trait1, trait2, trait3, trait4) if t])
+        thread_name = f"<{interaction.user.display_name}>{trait_names}"
+
+        # If it's a guild text channel, we can create a thread
+        if isinstance(interaction.channel, discord.TextChannel):
+            try:
+                # We send the initial message to the channel to act as the thread starter
+                starter_msg = await interaction.followup.send(
+                    content=f"Found {len(top_results)} doodles! Creating thread...",
+                    wait=True
+                )
+                
+                thread = await starter_msg.create_thread(name=thread_name[:100]) # Discord limits thread names to 100 chars
+                
+                # Send the embeds into the thread (Discord limits to 10 embeds per message, we have up to 7)
+                await thread.send(content="Here are the top results:", embeds=embeds)
+                
+                # Schedule auto-deletion of the thread and starter message after 10 minutes (600 seconds)
+                import asyncio
+                async def delete_thread_later():
+                    await asyncio.sleep(600)
+                    try:
+                        await starter_msg.delete()
+                    except Exception:
+                        pass
+                    try:
+                        await thread.delete()
+                    except Exception:
+                        pass
+                        
+                asyncio.create_task(delete_thread_later())
+            except Exception as e:
+                log.error("Failed to create thread or send embeds: %s", e)
+                # Fallback: just send the embeds in the channel
+                await interaction.followup.send(embeds=embeds)
+        else:
+            # Fallback for DMs or non-text channels
+            msg = await interaction.followup.send(
+                content=f"Here are the top {len(top_results)} doodles matching your search:",
+                embeds=embeds,
+                wait=True
+            )
+            # Try to delete after 10m
             import asyncio
-            asyncio.create_task(msg.delete(delay=600))
-        except Exception as e:
-            log.warning(f"Failed to schedule deletion for doodlesearch message: {e}")
+            try:
+                asyncio.create_task(msg.delete(delay=600))
+            except Exception:
+                pass
