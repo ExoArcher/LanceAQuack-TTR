@@ -99,7 +99,7 @@ def register_doodlesearch(bot: TTRBot) -> None:
         trait4="Filter by a fourth trait",
         playground="Filter by a playground (e.g., 'Donald\\'s Dreamland')",
         district="Filter by a district (e.g., 'Splat Summit')",
-        jellybean_cost="Filter by exact jellybean cost",
+        cost="Filter by exact jellybean cost",
     )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -111,7 +111,7 @@ def register_doodlesearch(bot: TTRBot) -> None:
         trait4: str = None,
         playground: str = None,
         district: str = None,
-        jellybean_cost: int = None,
+        cost: int = None,
     ) -> None:
         if await bot._reject_if_banned(interaction):
             return
@@ -153,7 +153,7 @@ def register_doodlesearch(bot: TTRBot) -> None:
                     cost = d.get("cost", "?")
                     parsed_cost = _cost_as_int(cost)
 
-                    if jellybean_cost is not None and parsed_cost != jellybean_cost:
+                    if cost is not None and parsed_cost != cost:
                         continue
                     
                     if search_traits:
@@ -166,7 +166,7 @@ def register_doodlesearch(bot: TTRBot) -> None:
                     results.append((dist, pg, traits, cost, dna, matched_count, similarity))
 
         # Drop "REST" tier doodles if we have a lot of results, unless specifically searching for bad ones
-        if len(results) > 7 and not search_traits and jellybean_cost is None:
+        if len(results) > 7 and not search_traits and cost is None:
             results = [r for r in results if doodle_priority(r[2]) != PRIORITY_REST]
 
         # Sort by closest requested traits first, then let quality fill blank slots.

@@ -274,6 +274,10 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
         # Commands are global and only need to be synced once after changes.
         # To force a re-sync, run: python sync_commands.py
         print("[Commands] Registered successfully", flush=True)
+        doodlesearch_cmd = self.tree.get_command("doodlesearch")
+        if doodlesearch_cmd is not None:
+            option_names = ", ".join(param.name for param in doodlesearch_cmd.parameters)
+            print(f"[Commands] /doodlesearch options: {option_names}", flush=True)
 
         self._guild_lifecycle = GuildLifecycleManager(self, self.config)
 
@@ -299,6 +303,10 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
         try:
             synced = await self.tree.sync()
             log.info("Synced %d global commands on startup.", len(synced))
+            doodlesearch_cmd = self.tree.get_command("doodlesearch")
+            if doodlesearch_cmd is not None:
+                option_names = ", ".join(param.name for param in doodlesearch_cmd.parameters)
+                log.info("/doodlesearch synced options: %s", option_names)
         except Exception as e:
             log.error("Failed to sync commands: %s", e)
 
