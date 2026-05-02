@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
 import discord
@@ -11,6 +13,42 @@ if TYPE_CHECKING:
     from bot import TTRBot
 
 log = logging.getLogger("ttr-bot.doodlesearch")
+
+
+def _norm_search_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _trait_similarity(requested: str, actual: str) -> float:
+    requested_norm = _norm_search_text(requested)
+    actual_norm = _norm_search_text(actual)
+    if not requested_norm or not actual_norm:
+        return 0.0
+    if requested_norm == actual_norm:
+        return 1.0
+    if requested_norm in actual_norm or actual_norm in requested_norm:
+        return 0.95
+    return SequenceMatcher(None, requested_norm, actual_norm).ratio()
+
+
+def _trait_search_score(search_traits: list[str], doodle_traits: list[str]) -> tuple[int, float]:
+    if not search_traits:
+        return 0, 0.0
+
+    best_scores = [
+        max((_trait_similarity(search_trait, trait) for trait in doodle_traits), default=0.0)
+        for search_trait in search_traits
+    ]
+    matched_count = sum(1 for score in best_scores if score >= 0.82)
+    average_score = sum(best_scores) / len(best_scores)
+    return matched_count, average_score
+
+
+def _cost_as_int(value: Any) -> int | None:
+    try:
+        return int(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
 
 
 async def _resolve_doodles_channel(
@@ -60,7 +98,8 @@ def register_doodlesearch(bot: TTRBot) -> None:
         trait3="Filter by a third trait",
         trait4="Filter by a fourth trait",
         playground="Filter by a playground (e.g., 'Donald\\'s Dreamland')",
-        district="Filter by a district (e.g., 'Splat Summit')"
+        district="Filter by a district (e.g., 'Splat Summit')",
+        jellybean_cost="Filter by exact jellybean cost",
     )
     @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
@@ -71,7 +110,8 @@ def register_doodlesearch(bot: TTRBot) -> None:
         trait3: str = None,
         trait4: str = None,
         playground: str = None,
-        district: str = None
+        district: str = None,
+        jellybean_cost: int = None,
     ) -> None:
         if await bot._reject_if_banned(interaction):
             return
@@ -96,7 +136,7 @@ def register_doodlesearch(bot: TTRBot) -> None:
         # Flatten and filter the doodles
         from Features.Core.formatters.formatters import doodle_priority, doodle_quality, PRIORITY_REST, JELLYBEAN_EMOJI, star_for
 
-        search_traits = [t.lower() for t in (trait1, trait2, trait3, trait4) if t]
+        search_traits = [t.strip() for t in (trait1, trait2, trait3, trait4) if t and t.strip()]
         
         results = []
         for dist, playgrounds in (doodle_data or {}).items():
@@ -110,28 +150,29 @@ def register_doodlesearch(bot: TTRBot) -> None:
                 for d in doodles:
                     traits = d.get("traits") or []
                     dna = d.get("dna", "")
-                    
-                    # Filter by all provided traits
-                    if search_traits:
-                        # Ensure every requested trait exists in the doodle's traits
-                        doodle_traits_lower = [t.lower() for t in traits]
-                        missing_trait = False
-                        for st in search_traits:
-                            # Substring match (e.g. "rarely tired" matches "Rarely Tired")
-                            if not any(st in dt for dt in doodle_traits_lower):
-                                missing_trait = True
-                                break
-                        if missing_trait:
-                            continue
+                    cost = d.get("cost", "?")
+                    parsed_cost = _cost_as_int(cost)
 
-                    results.append((dist, pg, traits, d.get("cost", "?"), dna))
+                    if jellybean_cost is not None and parsed_cost != jellybean_cost:
+                        continue
+                    
+                    if search_traits:
+                        matched_count, similarity = _trait_search_score(search_traits, traits)
+                        if matched_count == 0:
+                            continue
+                    else:
+                        matched_count, similarity = 0, 0.0
+
+                    results.append((dist, pg, traits, cost, dna, matched_count, similarity))
 
         # Drop "REST" tier doodles if we have a lot of results, unless specifically searching for bad ones
-        if len(results) > 7 and not search_traits:
+        if len(results) > 7 and not search_traits and jellybean_cost is None:
             results = [r for r in results if doodle_priority(r[2]) != PRIORITY_REST]
 
-        # Sort by best traits
+        # Sort by closest requested traits first, then let quality fill blank slots.
         results.sort(key=lambda r: (
+            -r[5],
+            -r[6],
             doodle_priority(r[2]),
             -doodle_quality(r[2]),
             r[0].lower(),
@@ -146,7 +187,7 @@ def register_doodlesearch(bot: TTRBot) -> None:
             return
 
         embeds = []
-        for dist, pg, traits, cost, dna in top_results:
+        for dist, pg, traits, cost, dna, _matched_count, _similarity in top_results:
             embed = discord.Embed(color=0x9124F2)
             
             traits_list = traits or []
