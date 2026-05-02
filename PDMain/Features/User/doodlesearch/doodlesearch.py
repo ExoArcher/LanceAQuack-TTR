@@ -126,8 +126,9 @@ def register_doodlesearch(bot: TTRBot) -> None:
             embeds.append(embed)
 
         # Generate thread name
-        trait_names = "".join([f" <{t.title()}>" for t in (trait1, trait2, trait3, trait4) if t])
-        thread_name = f"<{interaction.user.display_name}>{trait_names}"
+        from datetime import datetime, timezone
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        thread_name = f"{interaction.user.display_name}'s Search {now_str}"
 
         # If it's a guild text channel, we can create a thread
         if isinstance(interaction.channel, discord.TextChannel):
