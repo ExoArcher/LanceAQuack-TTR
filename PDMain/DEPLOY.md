@@ -40,16 +40,19 @@ For every server that should be allowed to use the bot:
 Replace `<APP_ID>` with the Application ID from step 1.3:
 
 ```
-https://discord.com/api/oauth2/authorize?client_id=<APP_ID>&permissions=93200&scope=bot+applications.commands
+https://discord.com/api/oauth2/authorize?client_id=<APP_ID>&permissions=326417607696&scope=bot+applications.commands
 ```
 
-The permission integer `93200` grants exactly:
+The permission integer `326417607696` grants exactly:
 
 - **Manage Channels** — to create the `Toontown Rewritten` category and
   feed channels.
 - **View Channels**, **Send Messages**, **Embed Links**,
   **Read Message History**, **Manage Messages** — to post, edit, and
   pin the live feed embeds.
+- **Create Public Threads**, **Send Messages in Threads**, and
+  **Manage Threads** — to create temporary `/doodlesearch` result
+  threads in `#tt-doodles` and maintain the suit calculator threads.
 
 ## 4. Purchase and set up your Cybrancee plan
 
@@ -166,7 +169,7 @@ adding servers on the fly.
 
 **`/ttr_setup` errors with "missing permissions."**
 The bot was invited with too few permissions. Re-invite using the URL
-from step 3 — make sure `permissions=93200` is in the link.
+from step 3 — make sure `permissions=326417607696` is in the link.
 
 **Slash commands don't appear after invite.**
 Discord caches global slash commands for up to an hour the first time.
