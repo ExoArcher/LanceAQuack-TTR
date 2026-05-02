@@ -43,6 +43,9 @@ async def _periodic_allowlist_check() -> None:
 
 async def _periodic_banned_quarantine_check(bot) -> None:
     """Run banned users/quarantine/blacklist sync every 6 hours (Phase 4 support)."""
+    # Wait until bot is fully initialized before accessing bot.guilds
+    await bot.wait_until_ready()
+
     while True:
         try:
             await cache_manager.refresh_banned_and_quarantine()
