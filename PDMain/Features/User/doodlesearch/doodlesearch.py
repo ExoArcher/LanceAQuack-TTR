@@ -133,25 +133,25 @@ def register_doodlesearch(bot: TTRBot) -> None:
         # If it's a guild text channel, we can create a thread
         if isinstance(interaction.channel, discord.TextChannel):
             try:
-                # We send the initial message to the channel to act as the thread starter
-                starter_msg = await interaction.followup.send(
-                    content=f"Found {len(top_results)} doodles! Creating thread...",
-                    wait=True
+                # We send the initial message to fulfill the interaction
+                await interaction.followup.send(
+                    content=f"Found {len(top_results)} doodles! I'm creating a thread for the results..."
                 )
                 
-                thread = await starter_msg.create_thread(name=thread_name[:100]) # Discord limits thread names to 100 chars
+                # Create a standalone thread in the channel
+                thread = await interaction.channel.create_thread(
+                    name=thread_name[:100],
+                    type=discord.ChannelType.public_thread,
+                    auto_archive_duration=60
+                )
                 
-                # Send the embeds into the thread (Discord limits to 10 embeds per message, we have up to 7)
+                # Send the embeds into the thread
                 await thread.send(content="Here are the top results:", embeds=embeds)
                 
-                # Schedule auto-deletion of the thread and starter message after 10 minutes (600 seconds)
+                # Schedule auto-deletion of the thread after 10 minutes (600 seconds)
                 import asyncio
                 async def delete_thread_later():
                     await asyncio.sleep(600)
-                    try:
-                        await starter_msg.delete()
-                    except Exception:
-                        pass
                     try:
                         await thread.delete()
                     except Exception:
@@ -161,9 +161,9 @@ def register_doodlesearch(bot: TTRBot) -> None:
             except Exception as e:
                 log.error("Failed to create thread or send embeds: %s", e)
                 # Fallback: just send the embeds in the channel
-                await interaction.followup.send(embeds=embeds)
+                await interaction.channel.send(embeds=embeds)
         else:
-            # Fallback for DMs or non-text channels
+            # Fallback for DMs, existing threads, or non-text channels
             msg = await interaction.followup.send(
                 content=f"Here are the top {len(top_results)} doodles matching your search:",
                 embeds=embeds,
