@@ -178,7 +178,6 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
         intents = discord.Intents.default()
         intents.guilds = True
         super().__init__(intents=intents)
-        LiveFeedsFeature.__init__(self)
 
         self.config = config
         self.tree   = app_commands.CommandTree(self)

@@ -59,10 +59,11 @@ class LiveFeedsFeature:
       - self.wait_until_ready() -> Coroutine
     """
 
-    def __init__(self) -> None:
+    def __init__(self, **kwargs) -> None:
         # Timestamp of the last time doodle embeds were pushed to Discord.
         # 0.0 = never, which triggers an immediate doodle refresh on first run.
         self._last_doodle_refresh: float = 0.0
+        super().__init__(**kwargs)
 
     # ── FEED REFRESH ──────────────────────────────────────────────────────────
 
