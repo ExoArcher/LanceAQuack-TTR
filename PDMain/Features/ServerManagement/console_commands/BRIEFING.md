@@ -19,7 +19,7 @@ Handle stdin console commands from hosting panel. Restricted to BOT_ADMIN_IDs. S
 - `stop` command handler - notify guilds, shutdown gracefully
 - `restart` command handler - notify guilds, hot-restart via os.execv
 - `maintenance` command handler - toggle maintenance embed across all guilds
-- `announce <text>` command handler - broadcast announcement to all guilds' #tt-information
+- `announce <text>` command handler - broadcast announcement to all guilds' #tt-info
 - `help` command handler - list available commands
 - Integration via `run_console(bot)` at startup
 
@@ -36,7 +36,7 @@ When command received:
      - stop: notify all tracked guilds → shutdown gracefully
      - restart: notify all tracked guilds → os.execv restart
      - maintenance: toggle maintenance embed in all guilds' channels
-     - announce <text>: broadcast to all #tt-information channels (30-min TTL)
+     - announce <text>: broadcast to all #tt-info channels (30-min TTL)
      - help: print command list
   5. Log action to stdout/file
 ```
@@ -68,7 +68,7 @@ Response: Print "Maintenance mode enabled/disabled" to stdout.
 ```
 announce This is an announcement text
 ```
-Broadcast to all guilds' #tt-information channels. Message auto-deletes after 30 minutes.
+Broadcast to all guilds' #tt-info channels. Message auto-deletes after 30 minutes.
 Response: Print "Announcement broadcast to N guilds" to stdout.
 
 ### help
@@ -110,7 +110,7 @@ Response: Print command list to stdout.
 - [ ] stop command notifies guilds then exits
 - [ ] restart command notifies guilds then restarts
 - [ ] maintenance toggle creates/removes orange embeds
-- [ ] announce broadcasts to all #tt-information channels
+- [ ] announce broadcasts to all #tt-info channels
 - [ ] announce creates 30-minute TTL record
 - [ ] help lists all commands
 - [ ] Commands logged with timestamp and invoker

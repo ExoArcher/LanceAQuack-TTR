@@ -5,8 +5,8 @@ Initialize guild for live feed tracking. Creates category + 3 channels, posts pl
 
 ## Scope
 - Slash command: `/pd-setup`
-- Create "Toontown Rewritten" category (or use existing)
-- Create/find 3 channels: #tt-information, #tt-doodles, #suit-calculator
+- Create "PendragonTTR" category (or use existing)
+- Create/find 3 channels: #tt-info, #tt-doodles, #suit-calc
 - Post placeholder embeds in each channel
 - Store message IDs in state["guilds"][guild_id][feed_key]
 - Save state to database
@@ -23,10 +23,10 @@ Initialize guild for live feed tracking. Creates category + 3 channels, posts pl
 
 ## Channel Creation
 ```
-Category: "Toontown Rewritten"
-  #tt-information (for population, field offices, silly meter)
+Category: "PendragonTTR"
+  #tt-info (for population, field offices, silly meter)
   #tt-doodles (for doodle listings)
-  #suit-calculator (for static suit point tables + faction threads)
+  #suit-calc (for static suit point tables + faction threads)
 ```
 
 ## Placeholder Embeds
@@ -35,7 +35,7 @@ Each channel gets placeholder embeds with title "Loading {feed_key}..." and desc
 Suit calculator has 4 static embeds (not placeholders) showing point tables.
 
 ## Suit Calculator Threads
-4 faction threads are created inside #suit-calculator:
+4 faction threads are created inside #suit-calc:
 - "Sellbot" (red)
 - "Cashbot" (teal)
 - "Lawbot" (purple)
@@ -110,7 +110,7 @@ After setup, state["guilds"][guild_id] contains:
 - [ ] Ephemeral response sent to user
 
 ## Special Requirements
-- Category name: "Toontown Rewritten" (hardcoded)
+- Category name: "PendragonTTR" (from config)
 - Channel names from config.feeds() dict
 - Suit calculator embeds are static (built by build_suit_calculator_embeds())
 - Suit threads are named: "Sellbot", "Cashbot", "Lawbot", "Bossbot"

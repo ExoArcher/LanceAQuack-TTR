@@ -238,7 +238,7 @@ class MessageSweep:
                 except (TypeError, ValueError):
                     pass
 
-        # Protect suit-thread starter messages in #suit-calculator
+        # Protect suit-thread starter messages in #suit-calc
         suit_calc = guild_state.get("suit_calculator", {})
         if isinstance(suit_calc, dict) and int(suit_calc.get("channel_id", 0)) == channel_id:
             suit_threads = guild_state.get("suit_threads", {})

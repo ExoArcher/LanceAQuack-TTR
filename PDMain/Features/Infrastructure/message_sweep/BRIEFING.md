@@ -79,7 +79,7 @@ Every 15 minutes:
 
 ## File Paths
 - Stale messages may exist in any channel the bot has posted to
-- Focus on: #tt-information, #tt-doodles, #suit-calculator (main tracked channels)
+- Focus on: #tt-info, #tt-doodles, #suit-calc (main tracked channels)
 
 ## Error Handling
 - discord.NotFound - Message already deleted, skip

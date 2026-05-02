@@ -6,7 +6,7 @@ Provides a background stdin reader that processes hosting panel commands:
   - stop: notify all guilds, then shutdown gracefully
   - restart: notify all guilds, then hot-restart the process
   - maintenance: toggle maintenance mode embeds across all guilds
-  - announce <text>: broadcast announcement to all #tt-information channels (30-min TTL)
+  - announce <text>: broadcast announcement to all #tt-info channels (30-min TTL)
   - help: print available commands
 
 All commands are restricted to BOT_ADMIN_IDs for authorization.
@@ -40,7 +40,7 @@ HELP_TEXT = (
     "  stop           -- Notify all servers of shutdown, then exit.\n"
     "  restart        -- Notify all servers of restart, then restart the process.\n"
     "  maintenance    -- Toggle maintenance mode banner on/off in all server channels.\n"
-    "  announce <msg> -- Broadcast a message to all #tt-information channels (30-min TTL).\n"
+    "  announce <msg> -- Broadcast a message to all #tt-info channels (30-min TTL).\n"
     "  help           -- Show this list."
 )
 
@@ -148,7 +148,7 @@ async def _handle_stop(bot: TTRBot) -> None:
     Notify all tracked guilds of shutdown, then exit gracefully.
 
     Broadcasts a maintenance notice embed to every tracked guild's
-    #tt-information channel, then calls bot.close() to trigger the
+    #tt-info channel, then calls bot.close() to trigger the
     standard Discord shutdown sequence (which calls sys.exit(0)).
 
     Args:
@@ -185,7 +185,7 @@ async def _handle_restart(bot: TTRBot) -> None:
     Notify all tracked guilds of restart, then hot-restart the process.
 
     Broadcasts a restart notice embed to every tracked guild's
-    #tt-information channel, then calls os.execv to replace the
+    #tt-info channel, then calls os.execv to replace the
     current process with a fresh instance of the bot.
 
     Args:
@@ -222,8 +222,8 @@ async def _handle_maintenance(bot: TTRBot) -> None:
     Toggle maintenance mode banners across all tracked guilds.
 
     When OFF (no stored maintenance messages):
-      - Posts an orange maintenance banner to #tt-information, #tt-doodles,
-        and #suit-calculator in every tracked guild.
+      - Posts an orange maintenance banner to #tt-info, #tt-doodles,
+        and #suit-calc in every tracked guild.
       - Stores message IDs in bot.state["maintenance_mode_msgs"] for later deletion.
       - Persists to database.
 
@@ -295,7 +295,7 @@ async def _maintenance_turn_on(bot: TTRBot) -> None:
     """
     Post orange maintenance banners to all tracked guilds' feed channels.
 
-    Posts to #tt-information, #tt-doodles, and #suit-calculator.
+    Posts to #tt-info, #tt-doodles, and #suit-calc.
     Stores message IDs for later deletion when toggling off.
 
     Args:
@@ -366,8 +366,8 @@ async def _handle_announce(bot: TTRBot, text: str) -> None:
     """
     Broadcast an announcement to every tracked guild's feed channels.
 
-    Creates an announcement embed and broadcasts to #tt-information, #tt-doodles,
-    and #suit-calculator in every tracked guild. The announcements are recorded
+    Creates an announcement embed and broadcasts to #tt-info, #tt-doodles,
+    and #suit-calc in every tracked guild. The announcements are recorded
     with a 30-minute TTL (ANNOUNCEMENT_TTL_SECONDS) and are auto-deleted
     by the sweep loop.
 
@@ -408,7 +408,7 @@ async def _broadcast_to_all_info_channels(bot: TTRBot, embed: discord.Embed) -> 
     """
     Broadcast an embed to all tracked guilds' feed channels.
 
-    Posts the embed to #tt-information, #tt-doodles, and #suit-calculator
+    Posts the embed to #tt-info, #tt-doodles, and #suit-calc
     in every tracked guild. Logs individual channel failures but continues
     broadcasting to other channels.
 

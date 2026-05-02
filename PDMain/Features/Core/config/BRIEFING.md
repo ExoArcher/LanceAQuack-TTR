@@ -27,9 +27,9 @@ BOT_ADMIN_IDS          - Comma/space-separated user IDs for console commands
 REFRESH_INTERVAL           (default: 90)              - seconds between live feed refreshes
 USER_AGENT                 (default: "ttr-discord...")  - descriptive string for TTR API
 CHANNEL_CATEGORY           (default: "Toontown...")    - category name for channels
-CHANNEL_INFORMATION        (default: "tt-information") - channel for live feeds
+CHANNEL_INFORMATION        (default: "tt-info") - channel for live feeds
 CHANNEL_DOODLES            (default: "tt-doodles")     - channel for doodle info
-CHANNEL_SUIT_CALCULATOR    (default: "suit-calculator")- channel for suit calculator
+CHANNEL_SUIT_CALCULATOR    (default: "suit-calc")- channel for suit calculator
 BANNED_USER_IDS            (optional)                  - user IDs to ban from bot
 QUARANTINED_GUILD_IDS      (optional)                  - guilds to quarantine
 JELLYBEAN_EMOJI            (optional)                  - custom emoji ID for jellybeans

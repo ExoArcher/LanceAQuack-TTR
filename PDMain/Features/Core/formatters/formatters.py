@@ -984,7 +984,7 @@ _SILLYMETER_TOTAL = 5_000_000
 
 
 def format_sillymeter(data: dict[str, Any] | None) -> discord.Embed:
-    """Embed for the #tt-information channel showing Silly Meter status."""
+    """Embed for the #tt-info channel showing Silly Meter status."""
     embed = discord.Embed(title=":circus_tent: Silly Meter", color=TTR_COLOR)
 
     if data is None:

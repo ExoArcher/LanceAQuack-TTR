@@ -4,7 +4,7 @@
 Manage temporary announcement messages broadcast to all tracked guilds with automatic expiry cleanup. Announcements auto-delete after 30 minutes or can be deleted manually via console commands.
 
 ## Scope
-- Broadcast announcements to all guilds' #tt-information channels
+- Broadcast announcements to all guilds' #tt-info channels
 - Track announcement message IDs with expiry timestamps in database
 - Clean up expired announcements automatically (sweep loop)
 - Support console command `announce <text>` for broadcasting
@@ -21,7 +21,7 @@ Manage temporary announcement messages broadcast to all tracked guilds with auto
 ## Announcement Flow
 ```
 1. Console command: announce "Hello everyone"
-2. Bot posts message to each tracked guild's #tt-information
+2. Bot posts message to each tracked guild's #tt-info
 3. Store message ID + expiry (now + 30 mins) in DB
 4. Every 15 minutes, sweep loop deletes expired announcements
 5. Auto-cleanup of DB records for deleted messages
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS announcements (
 1. **Expiry-based cleanup** - Track expires_at timestamp, delete when passed
 2. **All-or-nothing** - Send to all guilds or abort gracefully
 3. **Stale message handling** - Skip deleted messages in sweep
-4. **Broadcast pattern** - Send to all guilds' #tt-information channels
+4. **Broadcast pattern** - Send to all guilds' #tt-info channels
 
 ## API Calls
 - `guild.get_channel(channel_id).send(content=...)` - Send announcement
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS announcements (
 
 ## Special Requirements
 - 30-minute expiry time is hardcoded (1800 seconds)
-- Broadcast should use channel name from config (e.g., "tt-information")
+- Broadcast should use channel name from config (e.g., "tt-info")
 - Graceful failure if channel is missing or bot lacks Send perms
 
 ## Integration Notes

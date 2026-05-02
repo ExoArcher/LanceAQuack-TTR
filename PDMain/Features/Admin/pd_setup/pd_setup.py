@@ -2,8 +2,8 @@
 """
 Paws Pendragon pd-setup admin command.
 
-Initializes a guild for live feed tracking. Creates the "Toontown Rewritten"
-category + 3 channels (#tt-information, #tt-doodles, #suit-calculator),
+Initializes a guild for live feed tracking. Creates the "PendragonTTR"
+category + 3 channels (#tt-info, #tt-doodles, #suit-calc),
 posts placeholder embeds, and stores message IDs in the database for later
 in-place editing by the refresh loop.
 
@@ -67,7 +67,7 @@ async def _ensure_channels(
             )
         channels[key] = channel
 
-    # Create suit-calculator channel
+    # Create suit-calc channel
     calc_channel = discord.utils.get(guild.text_channels, name=suit_calculator_name)
     if calc_channel is None:
         log.info("Creating channel #%s in %s", suit_calculator_name, guild.name)
@@ -137,7 +137,7 @@ async def _ensure_suit_calculator_pin(
     channel: discord.TextChannel,
     state: dict[str, Any],
 ) -> None:
-    """Post (or edit in place) the 4 static info embeds in #suit-calculator."""
+    """Post (or edit in place) the 4 static info embeds in #suit-calc."""
     embeds = build_suit_calculator_embeds()
     guild_state = state.setdefault("guilds", {}).setdefault(str(guild_id), {})
     entry = guild_state.get("suit_calculator", {})

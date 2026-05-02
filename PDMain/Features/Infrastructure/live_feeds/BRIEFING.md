@@ -15,7 +15,7 @@ Background task that periodically fetches live TTR data and updates Discord embe
   - Apply rate limiting (3 seconds between edits to same guild)
 - **Panel announcements**
   - Check for panel_announce.txt every 90 seconds
-  - Broadcast contents to all guilds' #tt-information channel
+  - Broadcast contents to all guilds' #tt-info channel
   - Delete the file after broadcasting
 
 ## Code to Extract

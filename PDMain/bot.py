@@ -8,14 +8,14 @@ How it works
    + runtime allowlist persisted in ``state.json``) are accepted; the
    bot leaves any other guild that tries to add it, DMing the owner
    with instructions to request access from ExoArcher.
-2. In each allowed guild, an admin runs **``/pd-setup``** once. That
-   command finds-or-creates the ``Toontown Rewritten`` category plus a
-   ``#tt-information``, ``#tt-doodles``, and ``#suit-calculator`` channel,
+2. In each allowed guild, an admin runs **``/pdsetup``** once. That
+   command finds-or-creates the ``PendragonTTR`` category plus a
+   ``#tt-info``, ``#tt-doodles``, and ``#suit-calc`` channel,
    posts placeholder messages in each, and stores the message IDs in
    ``state.json``.
 3. A background task runs every ``$REFRESH_INTERVAL`` seconds, fetches
    the TTR APIs ONCE, and edits each tracked guild's messages in place.
-   Doodle embeds are only updated every 12 hours (or on /pd-refresh).
+   Doodle embeds are only updated every 12 hours (or on /pdrefresh).
 4. A separate sweep task runs every 15 minutes removing stale bot messages.
 
 Slash commands (all users)
@@ -24,13 +24,13 @@ Slash commands (all users)
 ``/doodleinfo``   -- DM the full doodle list with ratings. Works as a User App.
 ``/helpme``       -- DM the list of available bot commands.
 ``/invite``       -- DM the links to add the bot to a server or personal account.
-``/pd-refresh``  -- Force an immediate refresh and sweep old messages.
+``/pdrefresh``   -- Force an immediate refresh and sweep old messages.
 ``/calculate``    -- Calculate remaining suit points and get optimised activity plans.
 
 Slash commands (Manage Channels + Manage Messages)
 ---------------------------------------------------
-``/pd-setup``    -- Create channels and start tracking this guild.
-``/pd-teardown`` -- Stop tracking this guild (channels are NOT deleted).
+``/pdsetup``     -- Create channels and start tracking this guild.
+``/pdteardown``  -- Stop tracking this guild (channels are NOT deleted).
 
 Console commands
 ----------------
@@ -228,7 +228,10 @@ class TTRBot(discord.AutoShardedClient):
         print("[API Client] Loaded successfully", flush=True)
 
         self._register_commands()
-        await self.tree.sync()
+        # tree.sync() is intentionally NOT called here on every restart.
+        # Calling it on every boot triggers Discord 429 rate limits.
+        # Commands are global and only need to be synced once after changes.
+        # To force a re-sync, run: python sync_commands.py
         print("[Commands] Registered successfully", flush=True)
 
     async def close(self) -> None:
@@ -387,7 +390,7 @@ class TTRBot(discord.AutoShardedClient):
     async def _ensure_suit_calculator_pin(
         self, guild_id: int, channel: discord.TextChannel,
     ) -> None:
-        """Post (or edit in place) the 4 static info embeds in #suit-calculator."""
+        """Post (or edit in place) the 4 static info embeds in #suit-calc."""
         embeds     = build_suit_calculator_embeds()
         gs         = self._guild_state(guild_id)
         entry      = gs.get("suit_calculator", {})
@@ -525,7 +528,7 @@ class TTRBot(discord.AutoShardedClient):
         gs["suit_threads"] = suit_threads
 
     async def _refresh_suit_calculator_all_guilds(self) -> None:
-        """Refresh the suit-calculator embeds for every tracked guild."""
+        """Refresh the suit-calc embeds for every tracked guild."""
         calc_name = self.config.channel_suit_calculator
         updated   = 0
         for guild_id_str in list(self._guilds_block().keys()):
@@ -710,7 +713,7 @@ class TTRBot(discord.AutoShardedClient):
                 except (TypeError, ValueError):
                     pass
 
-        # Protect suit-thread starter messages in #suit-calculator
+        # Protect suit-thread starter messages in #suit-calc
         suit_calc = self._guild_state(guild_id).get("suit_calculator", {})
         if isinstance(suit_calc, dict) and int(suit_calc.get("channel_id", 0)) == channel_id:
             suit_threads = self._guild_state(guild_id).get("suit_threads", {})
