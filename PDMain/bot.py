@@ -281,6 +281,14 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
     async def on_ready(self) -> None:
         assert self.user is not None
         log.info("Logged in as %s (id=%s)", self.user, self.user.id)
+        
+        # Automatically sync commands to Discord on startup
+        try:
+            synced = await self.tree.sync()
+            log.info("Synced %d global commands on startup.", len(synced))
+        except Exception as e:
+            log.error("Failed to sync commands: %s", e)
+
         log.info(
             "In %d guild(s); env-allowlist=%d; runtime-allowlist=%d; admins=%d",
             len(self.guilds), len(self.config.guild_allowlist),
