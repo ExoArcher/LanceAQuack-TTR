@@ -81,7 +81,10 @@ def register_doodlesearch(bot: TTRBot) -> None:
             return
 
         await interaction.response.defer(ephemeral=False, thinking=True)
-        await bot._maybe_welcome(interaction.user)
+        try:
+            await bot._maybe_welcome(interaction.user)
+        except Exception as exc:
+            log.warning("Failed to send welcome message: %s", exc)
 
         if bot._api is None:
             await interaction.followup.send("API client not ready yet.", ephemeral=True)
