@@ -1346,7 +1346,7 @@ async def _reject_if_banned(interaction: discord.Interaction) -> bool:
 
     Returns True if the user is banned (caller should return early).
     """
-    import db
+    from Features.Core.db import db
 
     record = await db.get_ban(interaction.user.id)
     if record is None:
