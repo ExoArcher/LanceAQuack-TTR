@@ -59,6 +59,18 @@ _BOT_DIR = _os.path.dirname(_os.path.abspath(__file__))
 _sys.path.insert(0, _BOT_DIR)
 _GIT_REPO = "https://github.com/ExoArcher/PawsPendragon-TTR"
 
+def _clear_bytecode_cache(_path: str) -> None:
+    """Recursively delete all __pycache__ directories to force bytecode recompile."""
+    try:
+        for _root, _dirs, _files in _os.walk(_path):
+            if "__pycache__" in _dirs:
+                _cache_dir = _os.path.join(_root, "__pycache__")
+                for _f in _os.listdir(_cache_dir):
+                    _os.remove(_os.path.join(_cache_dir, _f))
+                _os.rmdir(_cache_dir)
+    except Exception:
+        pass
+
 try:
     if not _os.path.isdir(_os.path.join(_BOT_DIR, ".git")):
         print("[auto-update] No .git found -- initialising repo from GitHub...", flush=True)
@@ -80,7 +92,9 @@ try:
         if _local != _remote:
             _subprocess.run(["git", "reset", "--hard", "origin/main"],
                             cwd=_BOT_DIR, check=True, capture_output=True)
-            print(f"[auto-update] Updated {_local[:7]} -> {_remote[:7]}. Restarting...", flush=True)
+            # Clear bytecode cache to force recompilation of all modules
+            _clear_bytecode_cache(_BOT_DIR)
+            print(f"[auto-update] Updated {_local[:7]} -> {_remote[:7]}. Cleared bytecode cache. Restarting...", flush=True)
             _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
         else:
             print(f"[auto-update] Already up to date ({_local[:7]}).", flush=True)
