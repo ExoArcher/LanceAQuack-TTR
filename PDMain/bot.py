@@ -564,6 +564,8 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
                 stored_ids = [int(i) for i in raw_ids if i]
 
         verified_ids: list[int] = []
+        added_count = 0
+        edited_count = 0
         for i, embed in enumerate(embeds):
             mid = stored_ids[i] if i < len(stored_ids) else None
             if mid:
@@ -571,11 +573,10 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
                     msg = await channel.fetch_message(mid)
                     await msg.edit(embed=embed)
                     verified_ids.append(msg.id)
-                    log.info("[suit-calc] Edited embed %d/%d msg=%s guild=%s",
-                             i+1, len(embeds), msg.id, guild_id)
+                    edited_count += 1
                     continue
                 except discord.NotFound:
-                    log.info("[suit-calc] Embed %d gone for guild %s -- reposting.", i+1, guild_id)
+                    log.debug("[suit-calc] Embed %d gone for guild %s -- reposting.", i+1, guild_id)
                 except discord.HTTPException as exc:
                     log.warning("[suit-calc] Could not edit embed %d: %s", i+1, exc)
             try:
@@ -586,14 +587,17 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
                     except (discord.Forbidden, discord.HTTPException) as exc:
                         log.debug("[suit-calc] Could not pin: %s", exc)
                 verified_ids.append(new_msg.id)
-                log.info("[suit-calc] Posted embed %d/%d msg=%s guild=%s (#%s)",
-                         i+1, len(embeds), new_msg.id, guild_id, channel.name)
+                added_count += 1
             except Exception as exc:
                 log.warning("[suit-calc] Failed to post embed %d in guild %s: %s",
                             i+1, guild_id, exc)
 
         if verified_ids:
             gs["suit_calculator"] = {"channel_id": channel.id, "message_ids": verified_ids}
+
+        if added_count or edited_count:
+            log.info("[%d][%d][%s][%d added][%d updated]",
+                     guild_id, channel.id, channel.name, added_count, edited_count)
 
     async def _ensure_suit_threads(
         self, guild_id: int, channel: discord.TextChannel,
@@ -633,7 +637,7 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
                         auto_archive_duration=10080,
                         type=discord.ChannelType.public_thread,
                     )
-                    log.info("[suit-threads] Created thread '%s' guild=%s", thread_name, guild_id)
+                    log.debug("[suit-threads] Created thread '%s' guild=%s", thread_name, guild_id)
                 except discord.Forbidden:
                     log.warning("[suit-threads] No permission to create thread '%s' guild=%s",
                                 thread_name, guild_id)
@@ -651,6 +655,8 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
 
             # Post or edit the 3 embeds
             verified_ids: list[int] = []
+            added_count = 0
+            edited_count = 0
             for i, embed in enumerate(embeds):
                 mid = msg_ids[i] if i < len(msg_ids) else None
                 if mid:
@@ -658,8 +664,7 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
                         msg = await thread.fetch_message(mid)
                         await msg.edit(embed=embed)
                         verified_ids.append(msg.id)
-                        log.info("[suit-threads] Edited embed %d/3 in '%s' guild=%s",
-                                 i + 1, thread_name, guild_id)
+                        edited_count += 1
                         continue
                     except discord.NotFound:
                         pass
@@ -669,8 +674,7 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
                 try:
                     new_msg = await thread.send(embed=embed)
                     verified_ids.append(new_msg.id)
-                    log.info("[suit-threads] Posted embed %d/3 in '%s' guild=%s",
-                             i + 1, thread_name, guild_id)
+                    added_count += 1
                 except discord.Forbidden:
                     log.warning("[suit-threads] No send permission in thread '%s' guild=%s",
                                 thread_name, guild_id)
@@ -686,6 +690,10 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
                 log.debug("[suit-threads] Could not lock '%s': %s", thread_name, exc)
 
             suit_threads[faction_key] = {"thread_id": thread.id, "message_ids": verified_ids}
+
+            if added_count or edited_count:
+                log.info("[%d][%d][%s][%d added][%d updated]",
+                         guild_id, channel.id, thread_name, added_count, edited_count)
 
         gs["suit_threads"] = suit_threads
 
