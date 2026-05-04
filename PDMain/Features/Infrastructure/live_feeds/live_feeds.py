@@ -158,15 +158,15 @@ class LiveFeedsFeature:
                 channels = guild_stats[guild_id]
 
                 if channels:
-                    # Server log: [ServerName][ServerID][# Channels Logged][# ThreadsLogged]
-                    log.info("[%s][%d][%d][0]", guild_name, guild_id, len(channels))
+                    # Server log: [ServerName][ServerID][# Channels][# Threads]
+                    log.info("[%s][%d][%d Channels][0 Threads]", guild_name, guild_id, len(channels))
 
                     # Channel logs
                     for ch_name in sorted(channels.keys()):
                         ch_data = channels[ch_name]  # {channel_id: {msg_add, msg_remove, msg_update}}
                         for ch_id, stats in ch_data.items():
-                            # [ChannelName][ChannelID][# "ThreadAdd"][# "ThreadRemove"][# "MsgAdd"][# "MsgRemove"][# "MsgUpdated"]
-                            log.info("[%s][%d][0][0][%d MsgAdd][%d MsgRemove][%d MsgUpdated]",
+                            # [ChannelName][ChannelID][# ThreadAdd][# ThreadRemove][# MsgAdd][# MsgRemove][# MsgUpdated]
+                            log.info("[%s][%d][0 ThreadAdd][0 ThreadRemove][%d MsgAdd][%d MsgRemove][%d MsgUpdated]",
                                      ch_name, ch_id, stats["msg_add"], stats["msg_remove"], stats["msg_update"])
 
             if refresh_doodles:
