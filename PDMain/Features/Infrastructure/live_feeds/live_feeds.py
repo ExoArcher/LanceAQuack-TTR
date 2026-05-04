@@ -103,6 +103,7 @@ class LiveFeedsFeature:
 
         For each tracked guild, calls _update_feed() to edit pinned messages.
         Respects 3-second delays between consecutive edits (rate limiting).
+        Outputs hierarchical logs at the end: Server -> Channels.
         """
         if self._api is None:
             return
@@ -113,8 +114,9 @@ class LiveFeedsFeature:
                 (now - self._last_doodle_refresh) >= DOODLE_REFRESH_INTERVAL
             )
             api_data = await self._fetch_all()
-            total_messages = 0
-            guilds_updated: set[int] = set()
+
+            # Structure: {guild_id: {channel_name: {channel_id: {msg_add, msg_remove, msg_update}}}}
+            guild_stats: dict[int, dict[str, dict[int, dict[str, int]]]] = {}
 
             for guild_id_str in list(self._guilds_block().keys()):
                 try:
@@ -127,6 +129,8 @@ class LiveFeedsFeature:
                 if guild_id in cache_manager.QuarantinedServerid:
                     continue
 
+                guild_stats[guild_id] = {}
+
                 for feed_key in self.config.feeds():
                     # Skip doodle embeds unless the 12-hour interval has elapsed
                     # (or this is a forced refresh from /pd-refresh).
@@ -134,30 +138,45 @@ class LiveFeedsFeature:
                         continue
 
                     try:
-                        updated = await self._update_feed(guild_id, feed_key, api_data)
-                        if updated:
-                            total_messages += updated
-                            guilds_updated.add(guild_id)
+                        stats = await self._update_feed(guild_id, feed_key, api_data)
+                        if any(stats.values()):
+                            # Get channel info from state
+                            entry = self._guild_state(guild_id).get(feed_key)
+                            if entry and isinstance(entry, dict):
+                                channel_id = int(entry.get("channel_id", 0))
+                                channel = self.get_channel(channel_id)
+                                if channel:
+                                    ch_name = channel.name
+                                    guild_stats[guild_id][ch_name] = {channel_id: stats}
                     except Exception:
                         log.exception("Failed updating %s/%s", guild_id, feed_key)
+
+            # Output hierarchical logs
+            for guild_id in sorted(guild_stats.keys()):
+                guild = self.get_guild(guild_id)
+                guild_name = guild.name if guild else "unknown"
+                channels = guild_stats[guild_id]
+
+                if channels:
+                    # Server log: [ServerName][ServerID][# Channels Logged][# ThreadsLogged]
+                    log.info("[%s][%d][%d][0]", guild_name, guild_id, len(channels))
+
+                    # Channel logs
+                    for ch_name in sorted(channels.keys()):
+                        ch_data = channels[ch_name]  # {channel_id: {msg_add, msg_remove, msg_update}}
+                        for ch_id, stats in ch_data.items():
+                            # [ChannelName][ChannelID][# "ThreadAdd"][# "ThreadRemove"][# "MsgAdd"][# "MsgRemove"][# "MsgUpdated"]
+                            log.info("[%s][%d][0][0][%d MsgAdd][%d MsgRemove][%d MsgUpdated]",
+                                     ch_name, ch_id, stats["msg_add"], stats["msg_remove"], stats["msg_update"])
 
             if refresh_doodles:
                 self._last_doodle_refresh = now
                 log.info("Doodle embeds refreshed (next automatic refresh in 12 hours).")
 
-            if total_messages:
-                log.info(
-                    "Embed refresh: %d message(s) updated across %d server(s)",
-                    total_messages,
-                    len(guilds_updated),
-                )
-            else:
-                log.info("Embed refresh: no tracked servers to update.")
-
             await self._save_state()
 
-    async def _update_feed(self, guild_id: int, feed_key: str, api_data: dict[str, dict | None]) -> int:
-        """Update a single feed for a guild. Returns the number of messages edited/sent.
+    async def _update_feed(self, guild_id: int, feed_key: str, api_data: dict[str, dict | None]) -> dict:
+        """Update a single feed for a guild. Returns stats dict: {msg_add, msg_remove, msg_update}.
 
         - Looks up the stored message IDs for this guild/feed combination
         - Fetches the Discord channel
@@ -171,23 +190,23 @@ class LiveFeedsFeature:
 
         entry = self._guild_state(guild_id).get(feed_key)
         if not entry:
-            return 0
+            return {"msg_add": 0, "msg_remove": 0, "msg_update": 0}
 
         try:
             channel_id = int(entry.get("channel_id", 0))
             if channel_id == 0:
-                return 0
+                return {"msg_add": 0, "msg_remove": 0, "msg_update": 0}
         except (ValueError, TypeError):
             log.warning("Invalid channel_id in guild_state %s/%s", guild_id, feed_key)
-            return 0
+            return {"msg_add": 0, "msg_remove": 0, "msg_update": 0}
 
         channel = self.get_channel(channel_id)
         if not isinstance(channel, discord.TextChannel):
-            return 0
+            return {"msg_add": 0, "msg_remove": 0, "msg_update": 0}
 
         formatter = FORMATTERS.get(feed_key)
         if formatter is None:
-            return 0
+            return {"msg_add": 0, "msg_remove": 0, "msg_update": 0}
 
         embeds = formatter(api_data)
         if not isinstance(embeds, list):
@@ -206,7 +225,7 @@ class LiveFeedsFeature:
             ids.extend([0] * (len(embeds) - len(ids)))
 
         kept_ids: list[int] = []
-        edited = 0
+        msg_add = msg_remove = msg_update = 0
         retry_needed = False
 
         # Edit or recreate messages for each embed
@@ -221,7 +240,7 @@ class LiveFeedsFeature:
                         retry_needed = True
                     else:
                         kept_ids.append(mid)
-                        edited += 1
+                        msg_update += 1
                         await asyncio.sleep(3.0)
                 else:
                     # No stored message ID, send a new one
@@ -231,17 +250,18 @@ class LiveFeedsFeature:
                     except (discord.Forbidden, discord.HTTPException):
                         pass
                     kept_ids.append(new_msg.id)
-                    edited += 1
+                    msg_add += 1
                     await asyncio.sleep(3.0)
             except discord.NotFound:
                 # Message is stale (deleted), send a new one
+                msg_remove += 1
                 new_msg = await channel.send(embed=embed)
                 try:
                     await new_msg.pin(reason="Live TTR feed pin")
                 except (discord.Forbidden, discord.HTTPException):
                     pass
                 kept_ids.append(new_msg.id)
-                edited += 1
+                msg_add += 1
                 await asyncio.sleep(3.0)
             except discord.HTTPException as e:
                 log.warning(
@@ -267,13 +287,13 @@ class LiveFeedsFeature:
                         )
                     )
                     kept_ids.append(mid)
-                    edited += 1
+                    msg_update += 1
                     await asyncio.sleep(3.0)
                 except asyncio.TimeoutError:
                     log.warning("Timeout fetching stale-slot message %s (%s/%s) -- will retry.", mid, guild_id, feed_key)
                     retry_needed = True
             except discord.NotFound:
-                pass
+                msg_remove += 1
             except discord.HTTPException as e:
                 log.warning("Transient HTTP %s on stale-slot message %s -- will retry.", e.status, mid)
                 retry_needed = True
@@ -281,7 +301,7 @@ class LiveFeedsFeature:
         # Only save state if all updates succeeded; retry next cycle if any HTTPException occurred
         if not retry_needed:
             self._set_state(guild_id, feed_key, channel.id, kept_ids)
-        return edited
+        return {"msg_add": msg_add, "msg_remove": msg_remove, "msg_update": msg_update}
 
     @tasks.loop(seconds=90)
     async def _refresh_loop(self) -> None:
