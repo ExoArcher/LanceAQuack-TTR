@@ -1,6 +1,8 @@
-# Paws Pendragon TTR – Production-Grade Toontown Rewritten Discord Bot
+# Paws Pendragon TTR – Toontown Rewritten Discord Bot (Closed Alpha)
 
 **Live TTR data in your Discord.** A multi-guild bot that mirrors public Toontown Rewritten APIs into pinned embeds, complete with a full Cog suit progression calculator, doodle marketplace, and hierarchical logging.
+
+⚠️ **Closed Alpha:** This bot is in active development. Features and APIs may change. Stability feedback welcome.
 
 Deploy once, serve unlimited Discord servers from a single allowlist. Runs on **Cybrancee hosting** or any Linux box with Python 3.9+.
 
@@ -215,24 +217,23 @@ See **`DEPLOY.md`** for detailed step-by-step instructions, invite URLs, and tro
 
 ## Version History
 
-**V1.4** — Current release.
+**V Alpha 0.5.0** — Current release (Closed Alpha).
 - **`#suit-calculator` static channel** — 4 pinned embeds (one per faction) showing the full promotion point tables for every cog suit level (1–20), including 2.0 variants. Posted/edited on startup and `/pdrefresh`; not on the 90-second loop.
 - `/pdsetup` now creates `#suit-calculator` alongside `#tt-information` and `#tt-doodles`.
 - `/pdrefresh` now also refreshes the suit-calculator embeds.
 - Hierarchical logging for thread operations (suit calculator messages added/removed/updated per faction).
 
-**V1.3**
-- `/calculate <suit> <level> <current_points>` — suit disguise point calculator for all 4 factions. Accepts full names or abbreviations; handles 2.0 suits (`SB2.0`, `CB2.0`, `LB2.0`, `BB2.0`). Returns points still needed and ranked activity recommendations with per-run yield ranges.
-- Laff boost milestone detection (levels 50, 65, 80, 95, 100).
+**V Alpha 0.4.0**
+- `/calculate <suit> <level> <current_points>` — suit disguise point calculator for all 4 factions. Accepts full names or abbreviations; handles 2.0 suits (SB2.0, CB2.0, LB2.0, BB2.0). Returns points still needed and ranked activity recommendations with per-run yield ranges.
 
-**V1.2**
-- Console command: `announce <text>` — broadcasts to all servers from the hosting panel.
+**V Alpha 0.3.0**
+- Console command: `announce <text>` — broadcasts to all servers from the hosting panel (replaces `/pd-announce`).
 - Console command: `maintenance` — toggles a persistent orange banner in both `#tt-information` and `#tt-doodles` across all guilds. State survives restarts via database.
 - Console commands: `stop` and `restart` — each notifies all servers before acting.
 - Removed all bot-admin Discord slash commands (`/pd-ban`, `/pd-unban`, `/pd-banlist`, `/pd-announce`). Ban enforcement remains; manage bans via the database.
 - Discord 503 transient error handling: API outages are caught and retried automatically.
 
-**V1.1**
+**V Alpha 0.2.0**
 - User App install support (`/ttrinfo`, `/doodleinfo`, `/helpme`, `/invite` work outside servers).
 - Silly Meter embed in `#tt-information` with team descriptions, accumulated points, and percentage display.
 - Ban system with persistent ban records (reason, timestamp, banning admin).
@@ -242,7 +243,7 @@ See **`DEPLOY.md`** for detailed step-by-step instructions, invite URLs, and tro
 - Teardown logging to the database.
 - Rate limit protection: 3-second sleep between consecutive embed edits per guild.
 
-**V1.0** — Cybrancee hosting edition.
+**V Alpha 0.1.0**
 - Multi-guild rewrite with `/pdsetup`, allowlist enforcement, and per-guild message persistence.
 - Doodle tier guide with trait ratings.
 - District, invasion, and field office live embeds.
