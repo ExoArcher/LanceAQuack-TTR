@@ -607,10 +607,15 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
 
     async def _ensure_suit_threads(
         self, guild_id: int, channel: discord.TextChannel,
-    ) -> None:
-        """Post or edit the 3 static embeds inside each of the 4 faction threads."""
+    ) -> dict[str, dict]:
+        """Post or edit the 3 static embeds inside each of the 4 faction threads. Returns thread stats."""
         gs          = self._guild_state(guild_id)
         suit_threads: dict = gs.setdefault("suit_threads", {})
+        thread_stats: dict[str, dict] = {}
+
+        guild = channel.guild
+        guild_name = guild.name if guild else "Unknown"
+        channel_name = channel.name
 
         for faction_key in _FACTION_ORDER:
             thread_name = _FACTION_THREAD_NAMES[faction_key]
@@ -661,9 +666,9 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
 
             # Post or edit the 3 embeds
             verified_ids: list[int] = []
-            added_count = 0
-            removed_count = 0
-            edited_count = 0
+            msg_add = 0
+            msg_remove = 0
+            msg_update = 0
             for i, embed in enumerate(embeds):
                 mid = msg_ids[i] if i < len(msg_ids) else None
                 if mid:
@@ -671,17 +676,17 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
                         msg = await thread.fetch_message(mid)
                         await msg.edit(embed=embed)
                         verified_ids.append(msg.id)
-                        edited_count += 1
+                        msg_update += 1
                         continue
                     except discord.NotFound:
-                        removed_count += 1
+                        msg_remove += 1
                     except discord.HTTPException as exc:
                         log.warning("[suit-threads] Could not edit embed %d in '%s': %s",
                                     i + 1, thread_name, exc)
                 try:
                     new_msg = await thread.send(embed=embed)
                     verified_ids.append(new_msg.id)
-                    added_count += 1
+                    msg_add += 1
                 except discord.Forbidden:
                     log.warning("[suit-threads] No send permission in thread '%s' guild=%s",
                                 thread_name, guild_id)
@@ -698,11 +703,20 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
 
             suit_threads[faction_key] = {"thread_id": thread.id, "message_ids": verified_ids}
 
-            if added_count or removed_count or edited_count:
-                log.info("[%d][%s][%d][%d][%d]",
-                         thread.id, thread_name, added_count, removed_count, edited_count)
+            thread_stats[faction_key] = {
+                "thread_name": thread_name,
+                "thread_id": thread.id,
+                "msg_add": msg_add,
+                "msg_remove": msg_remove,
+                "msg_update": msg_update,
+            }
+
+            if msg_add or msg_remove or msg_update:
+                log.info("[%s][%s][%s][%d][%d MsgAdd][%d MsgRemove][%d MsgUpdated]",
+                         guild_name, channel_name, thread_name, thread.id, msg_add, msg_remove, msg_update)
 
         gs["suit_threads"] = suit_threads
+        return thread_stats
 
     async def _refresh_suit_calculator_all_guilds(self) -> None:
         """Refresh the suit-calc embeds for every tracked guild."""

@@ -221,6 +221,13 @@ def register_doodlesearch(bot: TTRBot) -> None:
                     auto_archive_duration=60
                 )
                 await thread.send(content="Here are the top results:", embeds=embeds)
+
+                guild = interaction.guild
+                guild_name = guild.name if guild else "Unknown"
+                guild_id = guild.id if guild else 0
+                log.info("[%s][%d][%s][%d][1 MsgAdd]",
+                         guild_name, guild_id, thread_name, thread.id)
+
                 await interaction.followup.send(
                     content=(
                         f"Found {len(top_results)} doodles! "

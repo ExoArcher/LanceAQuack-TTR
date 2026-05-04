@@ -210,12 +210,19 @@ def register_pd_refresh(bot: TTRBot) -> None:
 
                 if isinstance(channel, discord.TextChannel):
                     await bot._ensure_suit_calculator_pin(guild.id, channel)
-                    await bot._ensure_suit_threads(guild.id, channel)
+                    thread_stats = await bot._ensure_suit_threads(guild.id, channel)
                     suit_calc_updated = True
-                    log.info(
-                        "[pd-refresh] Updated suit calculator for guild %s",
-                        guild.id,
-                    )
+                    if thread_stats:
+                        log.info(
+                            "[pd-refresh] Updated suit calculator and %d thread(s) for guild %s",
+                            len(thread_stats),
+                            guild.id,
+                        )
+                    else:
+                        log.info(
+                            "[pd-refresh] Updated suit calculator for guild %s",
+                            guild.id,
+                        )
                 else:
                     log.warning(
                         "[pd-refresh] Suit calculator channel not found in guild %s",
