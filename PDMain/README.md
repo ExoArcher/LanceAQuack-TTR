@@ -25,6 +25,12 @@ After an admin runs `/pdsetup`, your server gets:
 
 Clean & efficient: One pinned message per section. In-place edits. Stale messages auto-swept every 15 min.
 
+### Live Updating Embeds
+
+Every 90 seconds, the bot fetches fresh data from the TTR API and **edits the pinned embeds in-place** with the latest information. No new messages posted — same embed, refreshed content. This keeps channels noise-free and Discord history clean.
+
+Doodle embeds update once every 12 hours (unless forced via `/pdrefresh`). Suit calculator embeds don't follow the 90-second loop; they're static and only update on bot startup and `/pdrefresh`.
+
 ---
 
 ## Suit Calculator
@@ -73,6 +79,7 @@ Available in servers, DMs, and group chats. Work as both a server bot and a pers
 |---|---|
 | `/ttrinfo` | DMs you the current district populations, cog invasions, field offices, and Silly Meter status. |
 | `/doodleinfo` | DMs you the full doodle availability list with trait ratings and a buying guide. |
+| `/doodlesearch [traits] [playground] [district] [cost]` | Advanced doodle finder. Filter by up to 4 traits (fuzzy-matched, e.g. "Playful"), playground, district, or exact jellybean cost. Returns top 7 ranked results with images in a thread. |
 | `/calculate <suit> <level> <current_points>` | Suit disguise point calculator. Accepts faction names or abbreviations; add `2.0` for 2.0 suits (e.g. `RB2.0`). Returns points needed, activity recommendations with yield ranges, and laff boost milestones. |
 | `/invite` | DMs you the links to add Paws Pendragon TTR to a server or personal account. |
 | `/helpme` | DMs you the full command list. Falls back to ephemeral if DMs are closed. |
