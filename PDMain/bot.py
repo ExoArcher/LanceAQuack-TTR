@@ -1104,7 +1104,8 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
         @app_commands.allowed_installs(guilds=True, users=True)
         @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
         async def invite(interaction: discord.Interaction) -> None:
-            await self._reject_if_banned(interaction)
+            if await self._reject_if_banned(interaction):
+                return
             bot_id = self.user.id if self.user else "1496971496709689654"
             server_link = (
                 f"https://discord.com/oauth2/authorize"

@@ -173,7 +173,15 @@ class LiveFeedsFeature:
         if not entry:
             return 0
 
-        channel = self.get_channel(int(entry["channel_id"]))
+        try:
+            channel_id = int(entry.get("channel_id", 0))
+            if channel_id == 0:
+                return 0
+        except (ValueError, TypeError):
+            log.warning("Invalid channel_id in guild_state %s/%s", guild_id, feed_key)
+            return 0
+
+        channel = self.get_channel(channel_id)
         if not isinstance(channel, discord.TextChannel):
             return 0
 
@@ -185,7 +193,12 @@ class LiveFeedsFeature:
         if not isinstance(embeds, list):
             embeds = [embeds]
         if not embeds:
-            return 0
+            # Send error embed to show feed is live but no data available
+            embeds = [discord.Embed(
+                title="Live Feed Error",
+                description="No data available from TTR API. Feed will update when data returns.",
+                color=0xFF0000
+            )]
 
         ids = self._state_message_ids(guild_id, feed_key)
         # Ensure we have at least as many message IDs as embeds
@@ -194,14 +207,22 @@ class LiveFeedsFeature:
 
         kept_ids: list[int] = []
         edited = 0
+        retry_needed = False
 
         # Edit or recreate messages for each embed
         for mid, embed in zip(ids, embeds):
             try:
                 if mid > 0:
-                    await (await channel.fetch_message(mid)).edit(embed=embed)
-                    kept_ids.append(mid)
-                    edited += 1
+                    try:
+                        msg = await asyncio.wait_for(channel.fetch_message(mid), timeout=5.0)
+                        await msg.edit(embed=embed)
+                    except asyncio.TimeoutError:
+                        log.warning("Timeout fetching message %s (%s/%s) -- will retry.", mid, guild_id, feed_key)
+                        retry_needed = True
+                    else:
+                        kept_ids.append(mid)
+                        edited += 1
+                        await asyncio.sleep(3.0)
                 else:
                     # No stored message ID, send a new one
                     new_msg = await channel.send(embed=embed)
@@ -211,6 +232,7 @@ class LiveFeedsFeature:
                         pass
                     kept_ids.append(new_msg.id)
                     edited += 1
+                    await asyncio.sleep(3.0)
             except discord.NotFound:
                 # Message is stale (deleted), send a new one
                 new_msg = await channel.send(embed=embed)
@@ -220,6 +242,7 @@ class LiveFeedsFeature:
                     pass
                 kept_ids.append(new_msg.id)
                 edited += 1
+                await asyncio.sleep(3.0)
             except discord.HTTPException as e:
                 log.warning(
                     "Transient HTTP %s editing message %s (%s/%s) -- will retry.",
@@ -228,36 +251,39 @@ class LiveFeedsFeature:
                     guild_id,
                     feed_key,
                 )
-                if mid > 0:
-                    kept_ids.append(mid)
-
-            await asyncio.sleep(3.0)
+                retry_needed = True
 
         # Handle extra slots (clear with placeholder if they have stale IDs)
         for mid in ids[len(embeds):]:
             if mid == 0:
                 continue
             try:
-                await (await channel.fetch_message(mid)).edit(
-                    embed=discord.Embed(
-                        description="*(no data for this tier right now)*",
-                        color=0x9124F2
+                try:
+                    msg = await asyncio.wait_for(channel.fetch_message(mid), timeout=5.0)
+                    await msg.edit(
+                        embed=discord.Embed(
+                            description="*(no data for this tier right now)*",
+                            color=0x9124F2
+                        )
                     )
-                )
-                kept_ids.append(mid)
-                edited += 1
+                    kept_ids.append(mid)
+                    edited += 1
+                    await asyncio.sleep(3.0)
+                except asyncio.TimeoutError:
+                    log.warning("Timeout fetching stale-slot message %s (%s/%s) -- will retry.", mid, guild_id, feed_key)
+                    retry_needed = True
             except discord.NotFound:
                 pass
             except discord.HTTPException as e:
-                log.warning("Transient HTTP %s on stale-slot message %s -- keeping ID.", e.status, mid)
-                kept_ids.append(mid)
+                log.warning("Transient HTTP %s on stale-slot message %s -- will retry.", e.status, mid)
+                retry_needed = True
 
-            await asyncio.sleep(3.0)
-
-        self._set_state(guild_id, feed_key, channel.id, kept_ids)
+        # Only save state if all updates succeeded; retry next cycle if any HTTPException occurred
+        if not retry_needed:
+            self._set_state(guild_id, feed_key, channel.id, kept_ids)
         return edited
 
-    @tasks.loop(seconds=60)
+    @tasks.loop(seconds=90)
     async def _refresh_loop(self) -> None:
         """Main background task running every ~90 seconds (or REFRESH_INTERVAL from config).
 
@@ -296,7 +322,9 @@ class LiveFeedsFeature:
             return
 
         try:
-            text = ANNOUNCE_FILE.read_text(encoding="utf-8").strip()
+            # Read max 10KB to prevent memory exhaustion
+            with open(ANNOUNCE_FILE, 'r', encoding='utf-8') as f:
+                text = f.read(10240).strip()
             ANNOUNCE_FILE.unlink()
         except Exception as e:
             log.warning("Could not read/delete panel_announce.txt: %s", e)
@@ -398,6 +426,7 @@ class LiveFeedsFeature:
             r for r in self._announcements()
             if int(r.get("message_id", -1)) != message_id
         ]
+        await self._save_state()
 
     # ── REQUIRED STUB METHODS (expected to be implemented by TTRBot) ────────────
 
