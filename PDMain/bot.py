@@ -565,6 +565,7 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
 
         verified_ids: list[int] = []
         added_count = 0
+        removed_count = 0
         edited_count = 0
         for i, embed in enumerate(embeds):
             mid = stored_ids[i] if i < len(stored_ids) else None
@@ -577,6 +578,7 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
                     continue
                 except discord.NotFound:
                     log.debug("[suit-calc] Embed %d gone for guild %s -- reposting.", i+1, guild_id)
+                    removed_count += 1
                 except discord.HTTPException as exc:
                     log.warning("[suit-calc] Could not edit embed %d: %s", i+1, exc)
             try:
@@ -595,9 +597,13 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
         if verified_ids:
             gs["suit_calculator"] = {"channel_id": channel.id, "message_ids": verified_ids}
 
-        if added_count or edited_count:
-            log.info("[%d][%d][%s][%d added][%d updated]",
-                     guild_id, channel.id, channel.name, added_count, edited_count)
+        guild = self.get_guild(guild_id)
+        guild_name = guild.name if guild else "unknown"
+
+        if added_count or removed_count or edited_count:
+            log.info("[%d][%s][%s][%d][%d][%d][%d]",
+                     guild_id, guild_name, channel.name, channel.id,
+                     added_count, removed_count, edited_count)
 
     async def _ensure_suit_threads(
         self, guild_id: int, channel: discord.TextChannel,
@@ -656,6 +662,7 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
             # Post or edit the 3 embeds
             verified_ids: list[int] = []
             added_count = 0
+            removed_count = 0
             edited_count = 0
             for i, embed in enumerate(embeds):
                 mid = msg_ids[i] if i < len(msg_ids) else None
@@ -667,7 +674,7 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
                         edited_count += 1
                         continue
                     except discord.NotFound:
-                        pass
+                        removed_count += 1
                     except discord.HTTPException as exc:
                         log.warning("[suit-threads] Could not edit embed %d in '%s': %s",
                                     i + 1, thread_name, exc)
@@ -691,9 +698,9 @@ class TTRBot(LiveFeedsFeature, discord.AutoShardedClient):
 
             suit_threads[faction_key] = {"thread_id": thread.id, "message_ids": verified_ids}
 
-            if added_count or edited_count:
-                log.info("[%d][%d][%s][%d added][%d updated]",
-                         guild_id, channel.id, thread_name, added_count, edited_count)
+            if added_count or removed_count or edited_count:
+                log.info("[%d][%s][%d][%d][%d]",
+                         thread.id, thread_name, added_count, removed_count, edited_count)
 
         gs["suit_threads"] = suit_threads
 
